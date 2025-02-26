@@ -1,0 +1,57 @@
+name: Build Linux Kernel
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [arm64]
+
+    steps:
+      - name: 🛠️ Check kernel source code...
+        uses: actions/checkout@v4
+
+      - name: 🏗️ Install necessary libraries...
+        run: |
+          sudo apt update
+          sudo apt install -y bc bison flex libssl-dev libelf-dev ccache \
+                              make clang llvm lld python3 gcc-aarch64-linux-gnu \
+                              crossbuild-essential-arm64
+
+      - name: 🔧 Set environment...
+        run: |
+          echo "ARCH=${{ matrix.arch }}" >> $GITHUB_ENV
+          if [ "${{ matrix.arch }}" == "arm64" ]; then
+            echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          fi
+
+      - name: 📑 Set kernel config...
+        run: |
+          make pme_defconfig
+
+      - name: 🚀 Compile kernel...
+        run: |
+          make CC=clang -j$(nproc) Image.gz-dtb
+
+      - name: 🏗️ Generate boot.img...
+        run: |
+          mkbootimg --kernel arch/arm64/boot/Image.gz-dtb \
+                    --ramdisk initrd.img \
+                    --base 0x80000000 \
+                    --cmdline "console=ttyMSM0,115200n8" \
+                    --output boot.img
+
+      - name: 📦 Upload result...
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-img
+          path: boot.img
