@@ -39,7 +39,6 @@
 #define CONFIG_HTC_BATT_WA_PCN0017 //Default disable hvdcp for non-standard cable
 #define CONFIG_HTC_BATT_WA_PCN0019 //Skip IACS ready timeout when FG reset is on going
 #define CONFIG_HTC_BATT_WA_PCN0021 //Set default AICL 1A, and set AICL back to 1.5A after kernel time 2min for car charger
-//#define CONFIG_HTC_BATT_WA_PCN0022 //Only draw 2A for all 5V chargers to prevent PMIC auto switch Fsw from 1.4MHz to 700KHz
 
 #include <linux/rtc.h>
 #ifdef CONFIG_HTC_BATT_PCN0011
@@ -78,10 +77,6 @@ tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec); \
 #define POWER_MONITOR_BATT_CAPACITY	77
 #define POWER_MONITOR_BATT_TEMP	330
 #endif //CONFIG_HTC_BATT_PCN0006
-
-#ifdef CONFIG_MACH_DUMMY
-#define DISPLAY_FLICKER_WA_ENABLE_LEVEL 75
-#endif
 
 #ifdef CONFIG_HTC_BATT_PCN0002
 /* stored consistent parameters */
@@ -143,9 +138,6 @@ struct battery_info_reply {
 	u32 overload;
 	u32 over_vchg;
 	u32 health;
-#ifdef CONFIG_MACH_DUMMY
-	u32 tps_otg_enable;
-#endif
 	bool is_full;
 #ifdef CONFIG_HTC_BATT_PCN0016
 	bool is_htcchg_ext_mode;
@@ -194,14 +186,12 @@ struct htc_battery_info {
 	struct power_supply		*bms_psy;
 	struct power_supply		*usb_psy;
 	int critical_low_voltage_mv;
-	int force_shutdown_batt_vol;
 	int smooth_chg_full_delay_min;
 	int decreased_batt_level_check;
 	int batt_full_voltage_mv;
 	int batt_full_current_ma;
 	int overload_curr_thr_ma;
 	struct wake_lock charger_exist_lock;
-	struct wake_lock batt_shutdown_lock;
 	struct wake_lock check_overheat_lock;
 	struct delayed_work chg_full_check_work;
 #ifdef CONFIG_HTC_BATT_PCN0022
@@ -222,9 +212,6 @@ struct htc_battery_info {
 	struct notifier_block fb_notif;
 	struct workqueue_struct *batt_fb_wq;
 	struct delayed_work work_fb;
-#ifdef CONFIG_MACH_DUMMY
-	struct timespec last_scr_off_time;
-#endif
 #endif
 	unsigned int htc_extension;	/* for htc in-house sw */
 };
@@ -356,12 +343,6 @@ int htc_battery_pd_charger_support(int size, struct htc_pd_data pd_data, int *ma
 bool htc_battery_get_pd_type(int *curr);
 #endif //CONFIG_HTC_BATT_PCN0020
 bool htc_battery_get_discharging_reason(void);
-int htc_get_surface_temp(void);
-#ifdef CONFIG_MACH_DUMMY
-bool htc_battery_is_pd_detected(void);
-int htc_battery_get_pd_current(void);
-int htc_battery_get_pd_vbus(int *vbus);
-#endif
 
 /* Implement on QCT driver */
 #ifdef CONFIG_HTC_BATT_PCN0018
@@ -385,7 +366,6 @@ bool is_otg_enabled(void);
 int pmi8996_get_chgr_sts(void);
 #ifdef CONFIG_HTC_BATT_WA_PCN0016
 void force_dump_fg_sram(void);
-void force_reset_fg(void);
 #endif //CONFIG_HTC_BATT_WA_PCN0016
 #ifdef CONFIG_HTC_BATT_WA_PCN0021
 void pmi8996_set_dcp_default(void);

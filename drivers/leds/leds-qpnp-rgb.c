@@ -299,6 +299,7 @@ static struct workqueue_struct *g_led_on_work_queue;
 static struct qpnp_led_data *g_led_red = NULL, *g_led_green = NULL, *g_led_blue = NULL, *g_led_virtual = NULL;
 
 
+static uint16_t current_off_timer = 0;
 static int current_blink = 0;
 static int table_level_num = 0;
 static DEFINE_MUTEX(flash_lock);
@@ -1992,38 +1993,6 @@ err_config_mpp:
 		regulator_put(led->mpp_cfg->mpp_reg);
 	return rc;
 }
-#ifdef CONFIG_LEDS_GET_ENG_ID
-int get_ENG_ID(void)
-{
-	uint8_t temp[4] = {0};
-	struct device_node *mfgnode = of_find_node_by_path("/chosen/mfg");
-
-	if (mfgnode) {
-		if (of_property_read_u8_array(mfgnode, "skuid.engineer_id",
-					temp, sizeof(uint32_t)/sizeof(uint8_t))) {
-			LED_ERR(" %s, Failed to get property: engineer_id\n", __func__);
-			return MAIN_TOUCH_SOLUTION;
-		}
-	} else {
-			LED_ERR(" %s, Failed to find device node\n", __func__);
-			return MAIN_TOUCH_SOLUTION;
-	}
-	//LED_INFO(" %s, full_id = %X", __func__,  temp[3] << 24 | temp[2] << 16 | temp[1] << 8 | temp[0]);
-	LED_INFO(" %s, engineer_id = 0x%2X", __func__, temp[0]&0x01);
-	switch(temp[0]&0x01){
-		case 0:
-			return MAIN_TOUCH_SOLUTION;
-			break;
-		case 1:
-			return SEC_TOUCH_SOLUTION;
-			break;
-		default:
-			return MAIN_TOUCH_SOLUTION;
-			break;
-	}
-
-}
-#endif
 
 #define CG_ID_LEN 5
 #define BLACK_ID 1
@@ -2072,9 +2041,7 @@ static void get_brightness_mapping_table(struct device_node *node)
 	} else {
 		LED_INFO("Get cmdline failed\n");
 	}
-#ifdef CONFIG_LEDS_GET_ENG_ID
-	touch_solution = get_ENG_ID();
-#endif
+
 	if(color_ID == BLACK_ID) {
 		if(touch_solution == SEC_TOUCH_SOLUTION) {
 			prop = of_find_property(node, "vk-black-pwm-array-sec",
@@ -2139,17 +2106,21 @@ void set_led_touch_solution(uint16_t solution)
 EXPORT_SYMBOL(set_led_touch_solution);
 #endif
 
+static struct lut_params multicolor_lut_params = {
+	.flags = QPNP_LED_PWM_FLAGS | PM_PWM_LUT_PAUSE_HI_EN,
+	.idx_len = SHORT_LUT_LEN,
+	.ramp_step_ms = 64,
+	.lut_pause_hi = 1792,
+	.lut_pause_lo = 0,
+};
+
 static int led_multicolor_short_blink(struct qpnp_led_data *led, int pwm_coefficient){
 	int rc = 0;
-	struct lut_params	lut_params;
+	struct lut_params	lut_params = multicolor_lut_params;
 	int *lut_short_blink;
-	LED_INFO("%s, name:%s, brightness = %d status: %d\n", __func__, led->cdev.name, led->cdev.brightness, led->status);
 
-	lut_params.flags = QPNP_LED_PWM_FLAGS | PM_PWM_LUT_PAUSE_HI_EN;
-	lut_params.idx_len = SHORT_LUT_LEN;
-	lut_params.ramp_step_ms = 64;
-	lut_params.lut_pause_hi = 1792; // Pause time = (1792 / 64 + 1) * 64 = 1856
-	lut_params.lut_pause_lo = 0;
+	LED_INFO("%s, name:%s, brightness = %d status: %d\n", __func__, led->cdev.name, led->cdev.brightness, led->status);
+	LED_INFO("%s: ramp %d pause %d hi %d lo\n", __func__, lut_params.ramp_step_ms, lut_params.lut_pause_hi, lut_params.lut_pause_lo);
 
 	switch(led->id){
 		case QPNP_ID_RGB_RED:
@@ -2554,6 +2525,15 @@ static void led_alarm_handler(struct alarm *alarm)
 	queue_work(g_led_work_queue, &ldata->led_off_work);
 }*/
 
+static ssize_t led_off_timer_show(struct device *dev,
+                                    struct device_attribute *attr,
+                                    char *buf)
+{
+	int min = current_off_timer / 60;
+	int sec = current_off_timer - (min * 60);
+	return sprintf(buf, "%d %d\n", min, sec);
+}
+
 static ssize_t led_off_timer_store(struct device *dev,
 				   struct device_attribute *attr,
 				   const char *buf, size_t count)
@@ -2579,6 +2559,7 @@ static ssize_t led_off_timer_store(struct device *dev,
 
 	LED_DBG("Setting %s off_timer to %d min %d sec \n", led_cdev->name, min, sec);
 	off_timer = min * 60 + sec;
+	current_off_timer = off_timer;
 
 /*	alarm_cancel(&led->led_alarm);
 	cancel_work_sync(&led->led_off_work);
@@ -2589,7 +2570,7 @@ static ssize_t led_off_timer_store(struct device *dev,
 	}*/
 	return count;
 }
-static DEVICE_ATTR(off_timer, 0200, NULL, led_off_timer_store);
+static DEVICE_ATTR(off_timer, 0644, led_off_timer_show, led_off_timer_store);
 
 
 static ssize_t pm8xxx_led_blink_show(struct device *dev,
@@ -2660,6 +2641,18 @@ static ssize_t led_multi_color_show(struct device *dev,
 	return sprintf(buf, "%x\n", ModeRGB);
 }
 
+static void update_ModeRGB(struct qpnp_led_data *led, uint32_t val)
+{
+	led->mode = (val & Mode_Mask) >> 24;
+	if(g_led_red)
+		g_led_red->rgb_cfg->pwm_cfg->pwm_coefficient= ((val & Red_Mask) >> 16) * indicator_pwm_ratio / 255;
+	if(g_led_green)
+		g_led_green->rgb_cfg->pwm_cfg->pwm_coefficient = ((val & Green_Mask) >> 8) * indicator_pwm_ratio / 255;
+	if(g_led_blue)
+		g_led_blue->rgb_cfg->pwm_cfg->pwm_coefficient = (val & Blue_Mask) * indicator_pwm_ratio / 255;
+	ModeRGB = val;
+}
+
 static ssize_t led_multi_color_store(struct device *dev,
 		struct device_attribute *attr,
 		const char *buf, size_t count)
@@ -2673,14 +2666,8 @@ static ssize_t led_multi_color_store(struct device *dev,
 		return -EINVAL;
 	led_cdev = (struct led_classdev *) dev_get_drvdata(dev);
 	led = container_of(led_cdev, struct qpnp_led_data, cdev);
-	led->mode = (val & Mode_Mask) >> 24;
-	if(g_led_red)
-		g_led_red->rgb_cfg->pwm_cfg->pwm_coefficient= ((val & Red_Mask) >> 16) * indicator_pwm_ratio / 255;
-	if(g_led_green)
-		g_led_green->rgb_cfg->pwm_cfg->pwm_coefficient = ((val & Green_Mask) >> 8) * indicator_pwm_ratio / 255;
-	if(g_led_blue)
-		g_led_blue->rgb_cfg->pwm_cfg->pwm_coefficient = (val & Blue_Mask) * indicator_pwm_ratio / 255;
-	ModeRGB = val;
+
+	update_ModeRGB(led, val);
 	LED_INFO(" %s , ModeRGB = %x\n" , __func__, val);
 	queue_work(g_led_on_work_queue, &led->led_multicolor_work);
 	return count;
@@ -2688,6 +2675,38 @@ static ssize_t led_multi_color_store(struct device *dev,
 
 static DEVICE_ATTR(ModeRGB, 0644, led_multi_color_show,
 		led_multi_color_store);
+
+static ssize_t led_multi_color_mode_and_lut_params_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%x %d %d %d\n", ModeRGB, multicolor_lut_params.ramp_step_ms, multicolor_lut_params.lut_pause_hi, multicolor_lut_params.lut_pause_lo);
+}
+
+static ssize_t led_multi_color_mode_and_lut_params_store(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t count)
+{
+	struct led_classdev *led_cdev = (struct led_classdev *) dev_get_drvdata(dev);
+	struct qpnp_led_data *led = container_of(led_cdev, struct qpnp_led_data, cdev);
+	uint32_t new_ModeRGB;
+	uint32_t ramp_step_ms, lut_pause_hi, lut_pause_lo;
+
+	if (sscanf(buf, "%x %u %u %u", &new_ModeRGB, &ramp_step_ms, &lut_pause_hi, &lut_pause_lo) != 4) {
+		return -EINVAL;
+	}
+
+	update_ModeRGB(led, new_ModeRGB);
+	multicolor_lut_params.ramp_step_ms = ramp_step_ms;
+	multicolor_lut_params.lut_pause_hi = lut_pause_hi;
+	multicolor_lut_params.lut_pause_lo = lut_pause_lo;
+
+	queue_work(g_led_on_work_queue, &led->led_multicolor_work);
+
+	return count;
+}
+
+static DEVICE_ATTR(mode_and_lut_params, 0644, led_multi_color_mode_and_lut_params_show,
+		led_multi_color_mode_and_lut_params_store);
 
 static ssize_t led_mpp_current_store(struct device *dev,
 		struct device_attribute *attr,
@@ -3012,7 +3031,7 @@ static int qpnp_leds_probe(struct spmi_device *spmi)
 		}
 #ifdef CONFIG_LEDS_VIRTUAL_KEY_CHECK_SOURCE
 		if(strcmp(led->cdev.name, "button-backlight") == 0) {
-			if(check_power_source() != led->base ) {
+			if(check_power_source() != led->base && led->base !=0xa100) {
 				LED_INFO("button-backlight not use power source 0x%04x\n", led->base);
 				goto fail_id_check;
 			}
@@ -3193,6 +3212,10 @@ static int qpnp_leds_probe(struct spmi_device *spmi)
 			rc = device_create_file(led->cdev.dev, &dev_attr_ModeRGB);
 			if (rc < 0) {
 				LED_ERR("%s: Failed to create %s attr ModeRGB\n", __func__,  led->cdev.name);
+			}
+			rc = device_create_file(led->cdev.dev, &dev_attr_mode_and_lut_params);
+			if (rc < 0) {
+				LED_ERR("%s: Failed to create %s attr mode_and_lut_params\n", __func__,  led->cdev.name);
 			}
 		}else{
 			/* configure default state */

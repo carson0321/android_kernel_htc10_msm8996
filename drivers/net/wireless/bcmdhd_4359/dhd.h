@@ -629,6 +629,7 @@ typedef struct dhd_pub {
 	uint32 new_tx_completed_count;
 	uint32 xmit_count;
 	uint32 xmit_record_time;
+	bool xmit_hang_possible;
 	/* HTC_WIFI_END */
 #endif /* CUSTOMER_HW_ONE */
 } dhd_pub_t;
@@ -885,7 +886,7 @@ inline static void MUTEX_UNLOCK_SOFTAP_SET(dhd_pub_t * dhdp)
 #define DHD_OS_OOB_IRQ_WAKE_LOCK_TIMEOUT(pub, val)	dhd_os_oob_irq_wake_lock_timeout(pub, val)
 #define DHD_OS_OOB_IRQ_WAKE_UNLOCK(pub)			dhd_os_oob_irq_wake_unlock(pub)
 #endif /* BCMPCIE_OOB_HOST_WAKE */
-#define DHD_PACKET_TIMEOUT_MS	500
+#define DHD_PACKET_TIMEOUT_MS	50
 #define DHD_EVENT_TIMEOUT_MS	1500
 
 /* Enum for IOCTL recieved status */
@@ -1243,8 +1244,7 @@ extern int dhd_os_busbusy_wait_negation(dhd_pub_t * pub, uint * condition);
 extern int dhd_os_busbusy_wake(dhd_pub_t * pub);
 
 extern bool dhd_is_concurrent_mode(dhd_pub_t *dhd);
-int dhd_iovar(dhd_pub_t *pub, int ifidx, char *name, char *param_buf, uint param_len,
-		char *res_buf, uint res_len, int set);
+extern int dhd_iovar(dhd_pub_t *pub, int ifidx, char *name, char *cmd_buf, uint cmd_len, int set);
 extern int dhd_getiovar(dhd_pub_t *pub, int ifidx, char *name, char *cmd_buf,
 		uint cmd_len, char **resptr, uint resp_len);
 
@@ -1569,9 +1569,9 @@ extern void *dhd_pub_shim(dhd_pub_t *dhd_pub);
 void dhd_save_fwdump(dhd_pub_t *dhd_pub, void * buffer, uint32 length);
 #endif /* DHD_FW_COREDUMP */
 
-#if defined(CUSTOMER_HW_ONE) && defined(DHDTCPACK_SUPPRESS)
+#ifdef CUSTOMER_HW_ONE
 int dhd_tcpack_suppress_dynamic_enable(struct net_device *net, int enable);
-#endif /* CUSTOMER_HW_ONE && DHDTCPACK_SUPPRESS */
+#endif
 #if defined(SET_RPS_CPUS)
 int dhd_rps_cpus_enable(struct net_device *net, int enable);
 int custom_rps_map_set(struct netdev_rx_queue *queue, char *buf, size_t len);

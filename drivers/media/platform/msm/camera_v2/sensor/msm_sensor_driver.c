@@ -10,7 +10,7 @@
  * GNU General Public License for more details.
  */
 
-#define SENSOR_DRIVER_I2C "camera"
+#define SENSOR_DRIVER_I2C "i2c_camera"
 /* Header file declaration */
 #include "msm_sensor.h"
 #include "msm_sd.h"
@@ -46,39 +46,9 @@ static struct kobject *android_ov12890eco_htc;
 //static const char *ov12890eco_htcVendor = "OmniVision";
 static const char *ov12890eco_htcNAME = "PMEose_htc";
 static const char *ov12890eco_htcSize = "12M";
-
-static struct kobject *android_ov12890eco_pdaf_htc;
-//static const char *ov12890eco_htcVendor = "OmniVision";
-static const char *ov12890eco_pdaf_htcNAME = "PMEose_pdaf_htc";
-static const char *ov12890eco_pdaf_htcSize = "12M";
-
-static struct kobject *android_imx351_htc;
-static struct kobject *android_imx351_cut11_htc;
-static struct kobject *android_imx351_cut11_sapphire_htc;
-static const char *imx351_htcNAME = "imx351_htc";
-static const char *imx351_cut11_htcNAME = "imx351_cut11_htc";
-static const char *imx351_cut11_sapphire_htcNAME = "imx351_cut11_sapphire_htc";
-static const char *imx351_htcSize = "16M";
-static const char *imx351_htcUltraPixel= "ultrapixel=2328x1744";
-
 /* HTC_END */
 
 /*HTC_START*/
-int OIS_FW_Update_Main = 0;
-int OIS_FW_Update_Front = 0;
-void msm_sensor_driver_get_OISFWUpdate(struct device_node *of_node)
-{
-    uint32_t OIS_FW_Update = 0;
-    if (0 > of_property_read_u32(of_node, "qcom,ois-fw", &OIS_FW_Update))
-    {
-        OIS_FW_Update = 0;
-    }
-    if(OIS_FW_Update == 1)
-        OIS_FW_Update_Main = 1;
-    else if(OIS_FW_Update == 2)
-        OIS_FW_Update_Front = 1;
-    pr_info("[CAM]%s: OIS_FW:%d, OIS_FW_Update_Main:%d, OIS_FW_Update_Front:%d\n",__func__, OIS_FW_Update, OIS_FW_Update_Main, OIS_FW_Update_Front);
-}
 uint32_t msm_sensor_driver_get_boardinfo(struct device_node *of_node)
 {
     uint32_t boardinfo = 0;
@@ -126,40 +96,6 @@ static ssize_t sensor_vendor_show_ov12890eco(struct device *dev,
 	sprintf(buf, "%s %s\n", ov12890eco_htcNAME, ov12890eco_htcSize);
 	ret = strlen(buf) + 1;
 	return ret;
-}
-
-static ssize_t sensor_vendor_show_ov12890eco_pdaf(struct device *dev,
-                struct device_attribute *attr, char *buf)
-{
-        ssize_t ret = 0;
-        sprintf(buf, "%s %s\n", ov12890eco_pdaf_htcNAME, ov12890eco_pdaf_htcSize);
-        ret = strlen(buf) + 1;
-        return ret;
-}
-
-static ssize_t sensor_vendor_show_imx351(struct device *dev,
-                struct device_attribute *attr, char *buf)
-{
-        ssize_t ret = 0;
-        sprintf(buf, "%s %s %s\n", imx351_htcNAME, imx351_htcSize, imx351_htcUltraPixel);
-        ret = strlen(buf) + 1;
-        return ret;
-}
-static ssize_t sensor_vendor_show_imx351_cut11(struct device *dev,
-                struct device_attribute *attr, char *buf)
-{
-        ssize_t ret = 0;
-        sprintf(buf, "%s %s %s\n", imx351_cut11_htcNAME, imx351_htcSize, imx351_htcUltraPixel);
-        ret = strlen(buf) + 1;
-        return ret;
-}
-static ssize_t sensor_vendor_show_imx351_cut11_sapphire(struct device *dev,
-                struct device_attribute *attr, char *buf)
-{
-        ssize_t ret = 0;
-        sprintf(buf, "%s %s %s\n", imx351_cut11_sapphire_htcNAME, imx351_htcSize, imx351_htcUltraPixel);
-        ret = strlen(buf) + 1;
-        return ret;
 }
 /* HTC_END */
 
@@ -258,100 +194,6 @@ static int ov12890eco_htc_sysfs_init(void)
 
 	return 0 ;
 }
-
-static int ov12890eco_pdaf_htc_sysfs_init(void)
-{
-        int ret ;
-        static  DEVICE_ATTR(sensor, 0444, sensor_vendor_show_ov12890eco_pdaf, NULL);
-        pr_info("PMEose_pdaf_htc:kobject creat and add\n");
-        android_ov12890eco_pdaf_htc = kobject_create_and_add("android_camera", NULL);
-        if (android_ov12890eco_pdaf_htc == NULL) {
-                pr_info("PMEose_pdaf_htc_sysfs_init: subsystem_register " \
-                "failed\n");
-                ret = -ENOMEM;
-                return ret ;
-        }
-        pr_info("PMEose_pdaf_htc:sysfs_create_file\n");
-        ret = sysfs_create_file(android_ov12890eco_pdaf_htc, &dev_attr_sensor.attr);
-        if (ret) {
-                pr_info("PMEose_pdaf_htc_sysfs_init: sysfs_create_file " \
-                "failed\n");
-                kobject_del(android_ov12890eco_pdaf_htc);
-        }
-        pr_info("[CAM][Sensor main]%s %s\n", ov12890eco_pdaf_htcNAME, ov12890eco_pdaf_htcSize);
-
-        return 0 ;
-}
-static int imx351_htc_sysfs_init(void)
-{
-        int ret ;
-        static  DEVICE_ATTR(sensor, 0444, sensor_vendor_show_imx351, NULL);
-        pr_info("imx351_htc:kobject creat and add\n");
-        android_imx351_htc = kobject_create_and_add("android_camera2", NULL);
-        if (android_imx351_htc == NULL) {
-                pr_info("Imx351_htc_sysfs_init: subsystem_register " \
-                "failed\n");
-                ret = -ENOMEM;
-                return ret ;
-        }
-        pr_info("imx351_htc:sysfs_create_file\n");
-        ret = sysfs_create_file(android_imx351_htc, &dev_attr_sensor.attr);
-        if (ret) {
-                pr_info("imx351_htc_sysfs_init: sysfs_create_file " \
-                "failed\n");
-                kobject_del(android_imx351_htc);
-        }
-        pr_info("[CAM][Sensor front]%s %s\n", imx351_htcNAME, imx351_htcSize);
-
-        return 0 ;
-}
-static int imx351_cut11_htc_sysfs_init(void)
-{
-        int ret ;
-        static  DEVICE_ATTR(sensor, 0444, sensor_vendor_show_imx351_cut11, NULL);
-        pr_info("imx351_cut11_htc:kobject creat and add\n");
-        android_imx351_cut11_htc = kobject_create_and_add("android_camera2", NULL);
-        if (android_imx351_cut11_htc == NULL) {
-                pr_info("Imx351_cut11_htc_sysfs_init: subsystem_register " \
-                "failed\n");
-                ret = -ENOMEM;
-                return ret ;
-        }
-        pr_info("imx351_cut11_htc:sysfs_create_file\n");
-        ret = sysfs_create_file(android_imx351_cut11_htc, &dev_attr_sensor.attr);
-        if (ret) {
-                pr_info("imx351_cut11_htc_sysfs_init: sysfs_create_file " \
-                "failed\n");
-                kobject_del(android_imx351_cut11_htc);
-        }
-        pr_info("[CAM][Sensor front]%s %s\n", imx351_cut11_htcNAME, imx351_htcSize);
-
-        return 0 ;
-}
-static int imx351_cut11_sapphire_htc_sysfs_init(void)
-{
-        int ret ;
-        static  DEVICE_ATTR(sensor, 0444, sensor_vendor_show_imx351_cut11_sapphire, NULL);
-        pr_info("imx351_cut11_sapphire_htc:kobject creat and add\n");
-        android_imx351_cut11_sapphire_htc = kobject_create_and_add("android_camera2", NULL);
-        if (android_imx351_cut11_sapphire_htc == NULL) {
-                pr_info("Imx351_cut11_sapphire_htc_sysfs_init: subsystem_register " \
-                "failed\n");
-                ret = -ENOMEM;
-                return ret ;
-        }
-        pr_info("imx351_cut11_sapphire_htc:sysfs_create_file\n");
-        ret = sysfs_create_file(android_imx351_cut11_sapphire_htc, &dev_attr_sensor.attr);
-        if (ret) {
-                pr_info("imx351_cut11_sapphire_htc_sysfs_init: sysfs_create_file " \
-                "failed\n");
-                kobject_del(android_imx351_cut11_sapphire_htc);
-        }
-        pr_info("[CAM][Sensor front]%s %s\n", imx351_cut11_sapphire_htcNAME, imx351_htcSize);
-
-        return 0 ;
-}
-
 /* HTC_END */
 
 //HTC_END
@@ -417,14 +259,11 @@ static int32_t msm_sensor_driver_create_i2c_v4l_subdev
 	struct i2c_client *client = s_ctrl->sensor_i2c_client->client;
 
 	CDBG("%s %s I2c probe succeeded\n", __func__, client->name);
-	if (0 == s_ctrl->bypass_video_node_creation) {
-		rc = camera_init_v4l2(&client->dev, &session_id);
-		if (rc < 0) {
-			pr_err("failed: camera_init_i2c_v4l2 rc %d", rc);
-			return rc;
-		}
+	rc = camera_init_v4l2(&client->dev, &session_id);
+	if (rc < 0) {
+		pr_err("failed: camera_init_i2c_v4l2 rc %d", rc);
+		return rc;
 	}
-
 	CDBG("%s rc %d session_id %d\n", __func__, rc, session_id);
 	snprintf(s_ctrl->msm_sd.sd.name,
 		sizeof(s_ctrl->msm_sd.sd.name), "%s",
@@ -439,11 +278,7 @@ static int32_t msm_sensor_driver_create_i2c_v4l_subdev
 	s_ctrl->msm_sd.sd.entity.name =	s_ctrl->msm_sd.sd.name;
 	s_ctrl->sensordata->sensor_info->session_id = session_id;
 	s_ctrl->msm_sd.close_seq = MSM_SD_CLOSE_2ND_CATEGORY | 0x3;
-	rc = msm_sd_register(&s_ctrl->msm_sd);
-	if (rc < 0) {
-		pr_err("failed: msm_sd_register rc %d", rc);
-		return rc;
-	}
+	msm_sd_register(&s_ctrl->msm_sd);
 	msm_sensor_v4l2_subdev_fops = v4l2_subdev_fops;
 #ifdef CONFIG_COMPAT
 	msm_sensor_v4l2_subdev_fops.compat_ioctl32 =
@@ -461,14 +296,11 @@ static int32_t msm_sensor_driver_create_v4l_subdev
 	int32_t rc = 0;
 	uint32_t session_id = 0;
 
-	if (0 == s_ctrl->bypass_video_node_creation) {
-		rc = camera_init_v4l2(&s_ctrl->pdev->dev, &session_id);
-		if (rc < 0) {
-			pr_err("failed: camera_init_v4l2 rc %d", rc);
-			return rc;
-		}
+	rc = camera_init_v4l2(&s_ctrl->pdev->dev, &session_id);
+	if (rc < 0) {
+		pr_err("failed: camera_init_v4l2 rc %d", rc);
+		return rc;
 	}
-
 	CDBG("rc %d session_id %d", rc, session_id);
 	s_ctrl->sensordata->sensor_info->session_id = session_id;
 
@@ -483,11 +315,7 @@ static int32_t msm_sensor_driver_create_v4l_subdev
 	s_ctrl->msm_sd.sd.entity.group_id = MSM_CAMERA_SUBDEV_SENSOR;
 	s_ctrl->msm_sd.sd.entity.name = s_ctrl->msm_sd.sd.name;
 	s_ctrl->msm_sd.close_seq = MSM_SD_CLOSE_2ND_CATEGORY | 0x3;
-	rc = msm_sd_register(&s_ctrl->msm_sd);
-	if (rc < 0) {
-		pr_err("failed: msm_sd_register rc %d", rc);
-		return rc;
-	}
+	msm_sd_register(&s_ctrl->msm_sd);
 	msm_cam_copy_v4l2_subdev_fops(&msm_sensor_v4l2_subdev_fops);
 #ifdef CONFIG_COMPAT
 	msm_sensor_v4l2_subdev_fops.compat_ioctl32 =
@@ -940,7 +768,6 @@ static int32_t msm_sensor_get_power_up_settings(void *setting,
 	struct msm_sensor_power_setting *pu_temp = NULL;
 	int index = 0;
         hw_version = msm_sensor_driver_get_boardinfo(of_node);
-        msm_sensor_driver_get_OISFWUpdate(of_node);
 //HTC_END
 	size = slave_info->power_setting_array.size;
 
@@ -1134,10 +961,6 @@ void msm_sensor_read_OTP(struct msm_camera_sensor_slave_info *sensor_slave_info,
 	    {
             pr_err("[CAM]%s: PMEose_htc, return", __func__);
 	    }
-            else if(strncmp("ov12890eco_pdaf_htc", sensor_slave_info->sensor_name, sizeof("ov12890eco_pdaf_htc")) == 0)
-            {
-            pr_err("[CAM]%s: PMEose_pdaf_htc, return", __func__);
-            }
 	    else
 	    pr_err("[CAM]%s: %s, return", __func__, sensor_slave_info->sensor_name);
 	    return;
@@ -1189,40 +1012,6 @@ void msm_sensor_read_OTP(struct msm_camera_sensor_slave_info *sensor_slave_info,
 	    ov12890eco_htc_sysfs_init();
 	    pr_err("[CAM]%s: PMEose_htc_sysfs_init done", __func__);
 	}
-        else if(strncmp("ov12890eco_pdaf_htc", sensor_slave_info->sensor_name, sizeof("ov12890eco_pdaf_htc")) == 0)
-        {
-            pr_err("[CAM]%s: PMEose_pdaf_htc, match sensor name, use byte address", __func__);
-#if 0            
-            // remove this for eeprom
-            #ifdef CONFIG_COMPAT
-            rc = s_ctrl->func_tbl->sensor_i2c_read_fuseid32(NULL, s_ctrl);
-            #else
-            rc = s_ctrl->func_tbl->sensor_i2c_read_fuseid(NULL, s_ctrl);
-            #endif
-#endif
-
-            ov12890eco_pdaf_htc_sysfs_init();
-            pr_err("[CAM]%s: PMEose_pdaf_htc_sysfs_init done", __func__);
-        }
-        else if(strncmp("imx351_htc", sensor_slave_info->sensor_name, sizeof("imx351_htc")) == 0)
-        {
-            pr_err("[CAM]%s: imx351_htc, match sensor name, use byte address", __func__);
-            imx351_htc_sysfs_init();
-            pr_err("[CAM]%s: imx351_htc_sysfs_init done", __func__);
-        }
-        else if(strncmp("imx351_cut11_htc", sensor_slave_info->sensor_name, sizeof("imx351_cut11_htc")) == 0)
-        {
-            pr_err("[CAM]%s: imx351_cut11_htc, match sensor name, use byte address", __func__);
-            imx351_cut11_htc_sysfs_init();
-            pr_err("[CAM]%s: imx351_cut11_htc_sysfs_init done", __func__);
-        }
-        else if(strncmp("imx351_cut11_sapphire_htc", sensor_slave_info->sensor_name, sizeof("imx351_cut11_sapphire_htc")) == 0)
-        {
-            pr_err("[CAM]%s: imx351_cut11_sapphire_htc, match sensor name, use byte address", __func__);
-            imx351_cut11_sapphire_htc_sysfs_init();
-            pr_err("[CAM]%s: imx351_cut11_sapphire_htc_sysfs_init done", __func__);
-        }
-
 	/* HTC_END */
 	else
 	{
@@ -1311,8 +1100,6 @@ int32_t msm_sensor_driver_probe(void *setting,
 			slave_info32->sensor_init_params;
 		slave_info->output_format =
 			slave_info32->output_format;
-		slave_info->bypass_video_node_creation =
-			!!slave_info32->bypass_video_node_creation;
 		kfree(slave_info32);
 	} else
 #endif
@@ -1323,21 +1110,6 @@ int32_t msm_sensor_driver_probe(void *setting,
 			rc = -EFAULT;
 			goto free_slave_info;
 		}
-	}
-
-	if (strlen(slave_info->sensor_name) >= MAX_SENSOR_NAME ||
-		strlen(slave_info->eeprom_name) >= MAX_SENSOR_NAME ||
-		strlen(slave_info->actuator_name) >= MAX_SENSOR_NAME ||
-		strlen(slave_info->ois_name) >= MAX_SENSOR_NAME) {
-		pr_err("failed: name len greater than 32.\n");
-		pr_err("sensor name len:%zu, eeprom name len: %zu.\n",
-			strlen(slave_info->sensor_name),
-			strlen(slave_info->eeprom_name));
-		pr_err("actuator name len: %zu, ois name len:%zu.\n",
-			strlen(slave_info->actuator_name),
-			strlen(slave_info->ois_name));
-		rc = -EINVAL;
-		goto free_slave_info;
 	}
 
 	/* Print slave info */
@@ -1355,8 +1127,7 @@ int32_t msm_sensor_driver_probe(void *setting,
 		slave_info->sensor_init_params.position);
 	CDBG("mount %d",
 		slave_info->sensor_init_params.sensor_mount_angle);
-	CDBG("bypass video node creation %d",
-		slave_info->bypass_video_node_creation);
+
 	/* Validate camera id */
 	if (slave_info->camera_id >= MAX_CAMERAS) {
 		pr_err("failed: invalid camera id %d max %d",
@@ -1547,10 +1318,6 @@ CSID_TG:
 		{
 			pr_err("PMEose_htc power up failed");
 		}
-                else if(strncmp("ov12890eco_pdaf_htc", slave_info->sensor_name, sizeof("ov12890eco_pdaf_htc")) == 0)
-                {
-                        pr_err("PMEose_pdaf_htc power up failed");
-                }
 		else
 		/* HTC_END */
 		pr_err("%s power up failed", slave_info->sensor_name);
@@ -1570,10 +1337,6 @@ CSID_TG:
 	{
 		pr_err("PMEose_htc probe succeeded");
 	}
-        else if(strncmp("ov12890eco_pdaf_htc", slave_info->sensor_name, sizeof("ov12890eco_pdaf_htc")) == 0)
-        {
-                pr_err("PMEose_pdaf_htc probe succeeded");
-        }
 	else
 	/* HTC_END */
 	pr_err("%s probe succeeded", slave_info->sensor_name);
@@ -1586,14 +1349,10 @@ CSID_TG:
 	 */
 	s_ctrl->is_probe_succeed = 1;
 
-	s_ctrl->bypass_video_node_creation =
-		slave_info->bypass_video_node_creation;
-
 	/*
 	 * Update the subdevice id of flash-src based on availability in kernel.
 	 */
-	if (strlen(slave_info->flash_name) == 0)
-	{
+	if (strlen(slave_info->flash_name) == 0) {
 		s_ctrl->sensordata->sensor_info->
 			subdev_id[SUB_MODULE_LED_FLASH] = -1;
 	}
@@ -1630,7 +1389,7 @@ CSID_TG:
 	}
 	/* Update sensor mount angle and position in media entity flag */
 	is_yuv = (slave_info->output_format == MSM_SENSOR_YCBCR) ? 1 : 0;
-	mount_pos = ((s_ctrl->is_secure & 0x1) << 26) | is_yuv << 25 |
+	mount_pos = is_yuv << 25 |
 		(s_ctrl->sensordata->sensor_info->position << 16) |
 		((s_ctrl->sensordata->
 		sensor_info->sensor_mount_angle / 90) << 8);
@@ -1642,11 +1401,6 @@ CSID_TG:
 
 	msm_sensor_fill_sensor_info(s_ctrl, probed_info, entity_name);
 
-	/*
-	 * Set probe succeeded flag to 1 so that no other camera shall
-	 * probed on this slot
-	 */
-	s_ctrl->is_probe_succeed = 1;
 	return rc;
 
 camera_power_down:
@@ -1720,16 +1474,6 @@ static int32_t msm_sensor_driver_get_dt_data(struct msm_sensor_ctrl_t *s_ctrl)
 	if (rc < 0) {
 		pr_err("failed: msm_sensor_driver_get_gpio_data rc %d", rc);
 		goto FREE_VREG_DATA;
-	}
-
-	/* Get custom mode */
-	rc = of_property_read_u32(of_node, "qcom,secure",
-		&s_ctrl->is_secure);
-	CDBG("qcom,secure = %d, rc %d", s_ctrl->is_secure, rc);
-	if (rc < 0) {
-		/* Set default to non-secure mode */
-		s_ctrl->is_secure = 0;
-		rc = 0;
 	}
 
 	/* Get CCI master */

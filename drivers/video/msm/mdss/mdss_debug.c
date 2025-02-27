@@ -204,7 +204,6 @@ static ssize_t panel_debug_base_reg_write(struct file *file,
 	ctrl_pdata = container_of(ctl->panel_data,
 		struct mdss_dsi_ctrl_pdata, panel_data);
 
-	pr_info("%s: reg[0]=%xh, len=%d\n", __func__, reg[0], len);
 	if (mdata->debug_inf.debug_enable_clock)
 		mdata->debug_inf.debug_enable_clock(1);
 
@@ -221,8 +220,7 @@ static ssize_t panel_debug_base_reg_read(struct file *file,
 			char __user *user_buf, size_t count, loff_t *ppos)
 {
 	struct mdss_debug_base *dbg = file->private_data;
-	u32 i, reg_buf_len = 0;
-	int len = 0;
+	u32 i, len = 0, reg_buf_len = 0;
 	char *panel_reg_buf, *rx_buf;
 	struct mdss_data_type *mdata = mdss_res;
 	struct mdss_mdp_ctl *ctl = mdata->ctl_off + 0;
@@ -418,9 +416,6 @@ static ssize_t mdss_debug_base_offset_write(struct file *file,
 
 	buf[count] = 0;	/* end of string */
 
-	if (off % sizeof(u32))
-		return -EINVAL;
-
 	sscanf(buf, "%5x %x", &off, &cnt);
 
 	if (off > dbg->max_offset)
@@ -495,9 +490,6 @@ static ssize_t mdss_debug_base_reg_write(struct file *file,
 	if (cnt < 2)
 		return -EFAULT;
 
-	if (off % sizeof(u32))
-		return -EFAULT;
-
 	if (off >= dbg->max_offset)
 		return -EFAULT;
 
@@ -542,9 +534,6 @@ static ssize_t mdss_debug_base_reg_read(struct file *file,
 			mutex_unlock(&mdss_debug_lock);
 			return -ENOMEM;
 		}
-
-		if (dbg->off % sizeof(u32))
-			return -EFAULT;
 
 		ptr = dbg->base + dbg->off;
 		tot = 0;
@@ -1237,9 +1226,6 @@ int mdss_debugfs_init(struct mdss_data_type *mdata)
 	mdss_debugfs_perf_init(mdd, mdata);
 
 	if (mdss_create_xlog_debug(mdd))
-		goto err;
-
-	if (mdss_create_frc_debug(mdd))
 		goto err;
 
 	mdata->debug_inf.debug_data = mdd;

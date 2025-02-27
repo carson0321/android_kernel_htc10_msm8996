@@ -131,7 +131,7 @@ asmlinkage long sys_rt_sigreturn(struct pt_regs *regs)
 	struct rt_sigframe __user *frame;
 
 	/* Always make any pending restarted system calls return -EINTR */
-	current->restart_block.fn = do_no_restart_syscall;
+	current_thread_info()->restart_block.fn = do_no_restart_syscall;
 
 	/*
 	 * Since we stacked the signal on a 128-bit boundary, then 'sp' should
@@ -342,11 +342,6 @@ static void do_signal(struct pt_regs *regs)
 	int syscall = (int)regs->syscallno;
 	struct ksignal ksig;
 
-	struct task_struct *t;
-	t = current;
-	if (t->comm && strstr(t->comm, "dq_log")) {
-		printk("[%s] %s ++\n", __func__, t->comm);
-	}
 	/*
 	 * If we were from a system call, check for system call restarting...
 	 */
@@ -392,10 +387,6 @@ static void do_signal(struct pt_regs *regs)
 		      !(ksig.ka.sa.sa_flags & SA_RESTART)))) {
 			regs->regs[0] = -EINTR;
 			regs->pc = continue_addr;
-		}
-
-		if (t->comm && strstr(t->comm, "dq_log")) {
-			printk("[%s] %s handle_signal --\n", __func__, t->comm);
 		}
 
 		handle_signal(&ksig, regs);

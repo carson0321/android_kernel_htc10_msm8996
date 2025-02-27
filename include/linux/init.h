@@ -145,7 +145,6 @@ typedef void (*ctor_fn_t)(void);
 extern int do_one_initcall(initcall_t fn);
 extern char __initdata boot_command_line[];
 extern char *saved_command_line;
-extern char *hashed_command_line;
 extern unsigned int reset_devices;
 
 /* used by init/main.c */
@@ -153,10 +152,6 @@ void setup_arch(char **);
 void prepare_namespace(void);
 void __init load_default_modules(void);
 int __init init_rootfs(void);
-
-#ifdef CONFIG_DEBUG_RODATA
-void mark_rodata_ro(void);
-#endif
 
 extern void (*late_time_init)(void);
 

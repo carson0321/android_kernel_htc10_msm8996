@@ -84,8 +84,7 @@ static struct nanohub_packet_pad *packet_alloc(int flags)
 	    sizeof(struct nanohub_packet_pad) + MAX_UINT8 +
 	    sizeof(struct nanohub_packet_crc);
 	uint8_t *packet = kmalloc(len, flags);
-	if (packet)
-		memset(packet, 0xFF, len);
+	memset(packet, 0xFF, len);
 	return (struct nanohub_packet_pad *)packet;
 }
 
@@ -158,7 +157,7 @@ static void packet_free(struct nanohub_packet_pad *packet)
 static int read_ack(struct nanohub_data *data, struct nanohub_packet *response,
 		    int timeout)
 {
-	int ret = 0, i;
+	int ret, i;
 	const int max_size = sizeof(struct nanohub_packet) + MAX_UINT8 +
 	    sizeof(struct nanohub_packet_crc);
 	unsigned long end = jiffies + msecs_to_jiffies(READ_ACK_TIMEOUT_MS);
@@ -204,7 +203,7 @@ static int read_ack(struct nanohub_data *data, struct nanohub_packet *response,
 static int read_msg(struct nanohub_data *data, struct nanohub_packet *response,
 		    int timeout)
 {
-	int ret = 0, i;
+	int ret, i;
 	const int max_size = sizeof(struct nanohub_packet) + MAX_UINT8 +
 	    sizeof(struct nanohub_packet_crc);
 	unsigned long end = jiffies + msecs_to_jiffies(READ_MSG_TIMEOUT_MS);
@@ -280,9 +279,6 @@ static int get_reply(struct nanohub_data *data, struct nanohub_packet *response,
 				ret = ERROR_NACK;
 			else if (response->reason == CMD_COMMS_BUSY)
 				ret = ERROR_BUSY;
-			else if (response->reason == CMD_COMMS_WRITE && response->data[0] == 0)
-				pr_warn("nanohub: ret=%d, sync=0x%x, seq=%d, reason=0x%x, len=%d, data[0]=%d\n",
-					ret, response->sync, response->seq, response->reason, response->len, response->data[0]);
 		}
 
 		if (response->seq != seq)

@@ -174,6 +174,7 @@ static int mdss_smmu_attach_v2(struct mdss_data_type *mdata)
 	struct mdss_smmu_client *mdss_smmu;
 	int i, rc = 0;
 
+	mutex_lock(&mdp_iommu_lock);
 	for (i = 0; i < MDSS_IOMMU_MAX_DOMAIN; i++) {
 		if (!mdss_smmu_is_valid_domain_type(mdata, i))
 			continue;
@@ -205,9 +206,11 @@ static int mdss_smmu_attach_v2(struct mdss_data_type *mdata)
 			}
 		} else {
 			pr_err("iommu device not attached for domain[%d]\n", i);
+			mutex_unlock(&mdp_iommu_lock);
 			return -ENODEV;
 		}
 	}
+	mutex_unlock(&mdp_iommu_lock);
 
 	return 0;
 
@@ -220,6 +223,7 @@ err:
 			mdss_smmu->domain_attached = false;
 		}
 	}
+	mutex_unlock(&mdp_iommu_lock);
 
 	return rc;
 }
@@ -235,6 +239,7 @@ static int mdss_smmu_detach_v2(struct mdss_data_type *mdata)
 	struct mdss_smmu_client *mdss_smmu;
 	int i;
 
+	mutex_lock(&mdp_iommu_lock);
 	for (i = 0; i < MDSS_IOMMU_MAX_DOMAIN; i++) {
 		if (!mdss_smmu_is_valid_domain_type(mdata, i))
 			continue;
@@ -243,6 +248,7 @@ static int mdss_smmu_detach_v2(struct mdss_data_type *mdata)
 		if (mdss_smmu && mdss_smmu->dev && !mdss_smmu->handoff_pending)
 			mdss_smmu_enable_power(mdss_smmu, false);
 	}
+	mutex_unlock(&mdp_iommu_lock);
 
 	return 0;
 }
@@ -323,7 +329,7 @@ static void mdss_smmu_unmap_dma_buf_v2(struct sg_table *table, int domain,
  * bank device
  */
 static int mdss_smmu_dma_alloc_coherent_v2(struct device *dev, size_t size,
-		dma_addr_t *phys, dma_addr_t *iova, void **cpu_addr,
+		dma_addr_t *phys, dma_addr_t *iova, void *cpu_addr,
 		gfp_t gfp, int domain)
 {
 	struct mdss_smmu_client *mdss_smmu = mdss_smmu_get_cb(domain);
@@ -332,8 +338,8 @@ static int mdss_smmu_dma_alloc_coherent_v2(struct device *dev, size_t size,
 		return -EINVAL;
 	}
 
-	*cpu_addr = dma_alloc_coherent(mdss_smmu->dev, size, iova, gfp);
-	if (!*cpu_addr) {
+	cpu_addr = dma_alloc_coherent(mdss_smmu->dev, size, iova, gfp);
+	if (!cpu_addr) {
 		pr_err("dma alloc coherent failed!\n");
 		return -ENOMEM;
 	}

@@ -799,13 +799,6 @@ static int kgsl_iommu_fault_handler(struct iommu_domain *domain,
 
 	ptname = MMU_FEATURE(mmu, KGSL_MMU_GLOBAL_PAGETABLE) ?
 		KGSL_MMU_GLOBAL_PT : tid;
-	/*
-	 * Trace needs to be logged before searching the faulting
-	 * address in free list as it takes quite long time in
-	 * search and delays the trace unnecessarily.
-	 */
-	trace_kgsl_mmu_pagefault(ctx->kgsldev, addr,
-			ptname, write ? "write" : "read");
 
 	if (test_bit(KGSL_FT_PAGEFAULT_LOG_ONE_PER_PAGE,
 		&adreno_dev->ft_pf_policy))
@@ -842,6 +835,8 @@ static int kgsl_iommu_fault_handler(struct iommu_domain *domain,
 		}
 	}
 
+	trace_kgsl_mmu_pagefault(ctx->kgsldev, addr,
+			ptname, write ? "write" : "read");
 
 	/*
 	 * We do not want the h/w to resume fetching data from an iommu
@@ -1497,8 +1492,6 @@ static int _setup_user_context(struct kgsl_mmu *mmu)
 			ret = PTR_ERR(mmu->defaultpagetable);
 			mmu->defaultpagetable = NULL;
 			return ret;
-		} else if (mmu->defaultpagetable == NULL) {
-			return -ENOMEM;
 		}
 	}
 

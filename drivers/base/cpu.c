@@ -253,43 +253,6 @@ static ssize_t __ref store_sched_static_cluster_pwr_cost(struct device *dev,
 	return err;
 }
 
-static ssize_t show_sched_budget(struct device *dev,
-		 struct device_attribute *attr, char *buf)
-{
-	struct cpu *cpu = container_of(dev, struct cpu, dev);
-	ssize_t rc;
-	int cpunum;
-	int budget;
-
-	cpunum = cpu->dev.id;
-
-	budget = sched_get_cpu_budget(cpunum);
-
-	rc = snprintf(buf, PAGE_SIZE-2, "%d\n", budget);
-
-	return rc;
-}
-
-static ssize_t __ref store_sched_budget(struct device *dev,
-				  struct device_attribute *attr,
-				  const char *buf, size_t count)
-{
-	struct cpu *cpu = container_of(dev, struct cpu, dev);
-	int cpuid = cpu->dev.id;
-	int budget, err;
-
-	err = kstrtoint(strstrip((char *)buf), 0, &budget);
-	if (err)
-		return err;
-
-	err = sched_set_cpu_budget(cpuid, budget);
-	if (err >= 0)
-		err = count;
-
-	return err;
-}
-
-
 static DEVICE_ATTR(sched_static_cpu_pwr_cost, 0644,
 					show_sched_static_cpu_pwr_cost,
 					store_sched_static_cpu_pwr_cost);
@@ -297,13 +260,9 @@ static DEVICE_ATTR(sched_static_cluster_pwr_cost, 0644,
 					show_sched_static_cluster_pwr_cost,
 					store_sched_static_cluster_pwr_cost);
 
-static DEVICE_ATTR(sched_budget, 0664,
-		show_sched_budget, store_sched_budget);
-
 static struct attribute *hmp_sched_cpu_attrs[] = {
 	&dev_attr_sched_static_cpu_pwr_cost.attr,
 	&dev_attr_sched_static_cluster_pwr_cost.attr,
-	&dev_attr_sched_budget.attr,
 	NULL
 };
 
@@ -458,42 +417,6 @@ static ssize_t __ref store_sched_prefer_idle(struct device *dev,
 	return err;
 }
 
-static ssize_t show_sched_budget(struct device *dev,
-		 struct device_attribute *attr, char *buf)
-{
-	struct cpu *cpu = container_of(dev, struct cpu, dev);
-	ssize_t rc;
-	int cpunum;
-	int budget;
-
-	cpunum = cpu->dev.id;
-
-	budget = sched_get_cpu_budget(cpunum);
-
-	rc = snprintf(buf, PAGE_SIZE-2, "%d\n", budget);
-
-	return rc;
-}
-
-static ssize_t __ref store_sched_budget(struct device *dev,
-				  struct device_attribute *attr,
-				  const char *buf, size_t count)
-{
-	struct cpu *cpu = container_of(dev, struct cpu, dev);
-	int cpuid = cpu->dev.id;
-	int budget, err;
-
-	err = kstrtoint(strstrip((char *)buf), 0, &budget);
-	if (err)
-		return err;
-
-	err = sched_set_cpu_budget(cpuid, budget);
-	if (err >= 0)
-		err = count;
-
-	return err;
-}
-
 static DEVICE_ATTR(sched_mostly_idle_freq, 0664, show_sched_mostly_idle_freq,
 						store_sched_mostly_idle_freq);
 static DEVICE_ATTR(sched_mostly_idle_load, 0664, show_sched_mostly_idle_load,
@@ -503,15 +426,11 @@ static DEVICE_ATTR(sched_mostly_idle_nr_run, 0664,
 static DEVICE_ATTR(sched_prefer_idle, 0664,
 		show_sched_prefer_idle, store_sched_prefer_idle);
 
-static DEVICE_ATTR(sched_budget, 0664,
-		show_sched_budget, store_sched_budget);
-
 static struct attribute *qhmp_sched_cpu_attrs[] = {
 	&dev_attr_sched_mostly_idle_load.attr,
 	&dev_attr_sched_mostly_idle_nr_run.attr,
 	&dev_attr_sched_mostly_idle_freq.attr,
 	&dev_attr_sched_prefer_idle.attr,
-	&dev_attr_sched_budget.attr,
 	NULL
 };
 
@@ -520,33 +439,6 @@ static struct attribute_group sched_qhmp_cpu_attr_group = {
 };
 
 #endif	/* CONFIG_SCHED_QHMP */
-
-static ssize_t uevent_suppress_store(struct device *dev,
-				struct device_attribute *attr,
-				const char *buf, size_t count)
-{
-	bool val;
-	int ret;
-
-	ret = strtobool(buf, &val);
-	if (ret < 0)
-		return ret;
-
-	dev_set_uevent_suppress(dev, val);
-	return count;
-}
-
-static DEVICE_ATTR_WO(uevent_suppress);
-
-static struct attribute *uevent_suppress_cpu_attrs[] = {
-	&dev_attr_uevent_suppress.attr,
-	NULL
-};
-
-static struct attribute_group uevent_suppress_cpu_attr_group = {
-	.attrs = uevent_suppress_cpu_attrs,
-};
-
 static const struct attribute_group *common_cpu_attr_groups[] = {
 #ifdef CONFIG_KEXEC
 	&crash_note_cpu_attr_group,
@@ -570,7 +462,6 @@ static const struct attribute_group *hotplugable_cpu_attr_groups[] = {
 #ifdef CONFIG_SCHED_QHMP
 	&sched_qhmp_cpu_attr_group,
 #endif
-	&uevent_suppress_cpu_attr_group,
 	NULL
 };
 
@@ -668,6 +559,7 @@ static void cpu_device_release(struct device *dev)
 	 */
 }
 
+#ifdef CONFIG_HAVE_CPU_AUTOPROBE
 #ifdef CONFIG_GENERIC_CPU_AUTOPROBE
 static ssize_t print_cpu_modalias(struct device *dev,
 				  struct device_attribute *attr,
@@ -690,7 +582,11 @@ static ssize_t print_cpu_modalias(struct device *dev,
 	buf[n++] = '\n';
 	return n;
 }
+#else
+#define print_cpu_modalias	arch_print_cpu_modalias
+#endif
 
+#ifdef CONFIG_HAVE_CPU_AUTOPROBE
 static int cpu_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	char *buf = kzalloc(PAGE_SIZE, GFP_KERNEL);
@@ -701,6 +597,7 @@ static int cpu_uevent(struct device *dev, struct kobj_uevent_env *env)
 	}
 	return 0;
 }
+#endif /*CONFIG_HAVE_CPU_AUTOPROBE*/
 #endif
 
 /*
@@ -723,7 +620,7 @@ int register_cpu(struct cpu *cpu, int num)
 	cpu->dev.offline_disabled = !cpu->hotpluggable;
 	cpu->dev.offline = !cpu_online(num);
 	cpu->dev.of_node = of_get_cpu_node(num, NULL);
-#ifdef CONFIG_GENERIC_CPU_AUTOPROBE
+#ifdef CONFIG_HAVE_CPU_AUTOPROBE
 	cpu->dev.bus->uevent = cpu_uevent;
 #endif
 	cpu->dev.groups = common_cpu_attr_groups;
@@ -747,7 +644,7 @@ struct device *get_cpu_device(unsigned cpu)
 }
 EXPORT_SYMBOL_GPL(get_cpu_device);
 
-#ifdef CONFIG_GENERIC_CPU_AUTOPROBE
+#ifdef CONFIG_HAVE_CPU_AUTOPROBE
 static DEVICE_ATTR(modalias, 0444, print_cpu_modalias, NULL);
 #endif
 
@@ -761,7 +658,7 @@ static struct attribute *cpu_root_attrs[] = {
 	&cpu_attrs[2].attr.attr,
 	&dev_attr_kernel_max.attr,
 	&dev_attr_offline.attr,
-#ifdef CONFIG_GENERIC_CPU_AUTOPROBE
+#ifdef CONFIG_HAVE_CPU_AUTOPROBE
 	&dev_attr_modalias.attr,
 #endif
 	NULL

@@ -59,10 +59,20 @@ static int htc_debug_read(struct seq_file *m, void *v)
     char RfMisc[FLAG_LEN+3]={0};
     struct file *filp = NULL;
     ssize_t nread;
+    int pnum;
 
     if(first_read){
         printk(KERN_ERR"%s: hdf init Start...\n", __func__);
-        filp = filp_open("/dev/block/bootdevice/by-name/misc", O_RDWR, 0);
+        pnum = get_partition_num_by_name("misc");
+
+        if (pnum < 0) {
+            printk(KERN_ERR"unknown partition number for misc partition\n");
+            return 0;
+        }
+
+        snprintf(filename, 32, "/dev/block/mmcblk0p%d", pnum);
+
+        filp = filp_open(filename, O_RDWR, 0);
         if (IS_ERR(filp)) {
             printk(KERN_ERR"unable to open file: %s\n", filename);
             return PTR_ERR(filp);
@@ -100,6 +110,7 @@ static ssize_t htc_debug_write(struct file *file, const char __user *buffer,
     char filename[32] = "";
     struct file *filp = NULL;
     ssize_t nread;
+    int pnum;
 
     SECMSG("%s called (count:%d)\n", __func__, (int)count);
 
@@ -118,7 +129,16 @@ static ssize_t htc_debug_write(struct file *file, const char __user *buffer,
     SECMSG("Receive :%s\n",buf);
     SECMSG("Flag    :%s\n",htc_debug_flag);
 
-    filp = filp_open("/dev/block/bootdevice/by-name/misc", O_RDWR, 0);
+    pnum = get_partition_num_by_name("misc");
+
+    if (pnum < 0) {
+        printk(KERN_ERR"unknown partition number for misc partition\n");
+        return 0;
+    }
+
+    snprintf(filename, 32, "/dev/block/mmcblk0p%d", pnum);
+
+    filp = filp_open(filename, O_RDWR, 0);
     if (IS_ERR(filp)) {
         printk(KERN_ERR"unable to open file: %s\n", filename);
         return PTR_ERR(filp);

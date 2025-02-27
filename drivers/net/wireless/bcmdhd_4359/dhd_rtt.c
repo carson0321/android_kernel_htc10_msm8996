@@ -821,8 +821,7 @@ dhd_rtt_common_set_handler(dhd_pub_t *dhd, const ftm_subcmd_info_t *p_subcmd_inf
 		return BCME_NOMEM;
 
 	/* no TLV to pack, simply issue a set-proxd iovar */
-	ret = dhd_iovar(dhd, 0, "proxd", (char *)p_proxd_iov, proxd_iovsize, NULL, 0, TRUE);
-
+	ret = dhd_iovar(dhd, 0, "proxd", (void *) p_proxd_iov, proxd_iovsize, 1);
 #ifdef RTT_DEBUG
 	if (ret != BCME_OK) {
 		DHD_ERROR(("error: Proxd IOVAR failed, status=%d\n", ret));
@@ -1071,7 +1070,7 @@ dhd_rtt_ftm_config(dhd_pub_t *dhd, wl_proxd_session_id_t session_id,
 		all_tlvsize = (bufsize - buf_space_left);
 		p_proxd_iov->len = htol16(all_tlvsize + WL_PROXD_IOV_HDR_SIZE);
 		ret = dhd_iovar(dhd, 0, "proxd", (char *)p_proxd_iov,
-				all_tlvsize + WL_PROXD_IOV_HDR_SIZE, NULL, 0, TRUE);
+			all_tlvsize + WL_PROXD_IOV_HDR_SIZE, 1);
 		if (ret != BCME_OK) {
 			DHD_ERROR(("%s : failed to set config \n", __FUNCTION__));
 		}
@@ -1264,7 +1263,7 @@ dhd_rtt_start(dhd_pub_t *dhd)
 	}
 	/* turn off mpc in case of non-associted */
 	if (!dhd_is_associated(dhd, NULL, NULL)) {
-		err = dhd_iovar(dhd, 0, "mpc", (char *)&mpc, sizeof(mpc), NULL, 0, TRUE);
+		err = dhd_iovar(dhd, 0, "mpc", (char *)&mpc, sizeof(mpc), 1);
 		if (err) {
 			DHD_ERROR(("%s : failed to set mpc\n", __FUNCTION__));
 			goto exit;
@@ -1421,7 +1420,7 @@ exit:
 			/* enable mpc again in case of error */
 			mpc = 1;
 			rtt_status->mpc = 0;
-			err = dhd_iovar(dhd, 0, "mpc", (char *)&mpc, sizeof(mpc), NULL, 0, TRUE);
+			err = dhd_iovar(dhd, 0, "mpc", (char *)&mpc, sizeof(mpc), 1);
 		}
 	}
 	return err;
@@ -1658,10 +1657,6 @@ dhd_rtt_event_handler(dhd_pub_t *dhd, wl_event_msg_t *event, void *event_data)
 		/* Ignore the Proxd event */
 		return ret;
 	}
-	if (!event_data) {
-		DHD_ERROR(("%s: event_data:NULL\n", __FUNCTION__));
-		return -EINVAL;
-	}
 	p_event = (wl_proxd_event_t *) event_data;
 	version = ltoh16(p_event->version);
 	if (version < WL_PROXD_API_VERSION) {
@@ -1684,11 +1679,6 @@ dhd_rtt_event_handler(dhd_pub_t *dhd, wl_event_msg_t *event, void *event_data)
 		goto exit;	/* ignore this event */
 	}
 	/* get TLVs len, skip over event header */
-	if (ltoh16(p_event->len) < OFFSETOF(wl_proxd_event_t, tlvs)) {
-		DHD_ERROR(("invalid FTM event length:%d\n", ltoh16(p_event->len)));
-		ret = -EINVAL;
-		goto exit;
-	}
 	tlvs_len = ltoh16(p_event->len) - OFFSETOF(wl_proxd_event_t, tlvs);
 	DHD_RTT(("receive '%s' event: version=0x%x len=%d method=%d sid=%d tlvs_len=%d\n",
 		p_loginfo->text,
@@ -1779,7 +1769,7 @@ dhd_rtt_event_handler(dhd_pub_t *dhd, wl_event_msg_t *event, void *event_data)
 		/* In case of no result for the peer device, make fake result for error case */
 		if (is_new) {
 			/* allocate new header for rtt_results */
-			rtt_results_header = kzalloc(sizeof(rtt_results_header_t), kflags);
+			rtt_results_header = kzalloc(sizeof(rtt_results_header_t), GFP_KERNEL);
 			if (!rtt_results_header) {
 				ret = -ENOMEM;
 				goto exit;

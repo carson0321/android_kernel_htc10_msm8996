@@ -25,10 +25,10 @@
 #include <linux/msm-bus-board.h>
 #include <linux/msm-bus.h>
 #include <linux/dma-mapping.h>
+#include <linux/highmem.h>
 #if defined(CONFIG_HTC_FEATURES_SSR)
 #include <linux/htc_flags.h>
 #endif
-#include <linux/highmem.h>
 
 #include <soc/qcom/subsystem_restart.h>
 #include <soc/qcom/ramdump.h>
@@ -585,8 +585,7 @@ static void pil_remove_proxy_vote(struct pil_desc *pil)
 }
 
 static int pil_init_image_trusted(struct pil_desc *pil,
-		const u8 *metadata, size_t size,
-		phys_addr_t addr, size_t sz)
+		const u8 *metadata, size_t size)
 {
 	struct pil_tz_data *d = desc_to_data(pil);
 	struct pas_init_image_req {
@@ -809,9 +808,6 @@ static void log_failure_reason(const struct pil_tz_data *d)
 	strlcpy(reason, smem_reason, min(size, MAX_SSR_REASON_LEN));
 	pr_err("%s subsystem failure reason: %s.\n", name, reason);
 
-#if defined(CONFIG_HTC_DEBUG_SSR)
-	subsys_set_restart_reason(d->subsys, reason);
-#endif
 	smem_reason[0] = '\0';
 	wmb();
 }
@@ -898,19 +894,9 @@ static irqreturn_t subsys_err_fatal_intr_handler (int irq, void *dev_id)
 static irqreturn_t subsys_wdog_bite_irq_handler(int irq, void *dev_id)
 {
 	struct pil_tz_data *d = subsys_to_data(dev_id);
-#if defined(CONFIG_HTC_DEBUG_SSR)
-#define HTC_DEBUG_TZ_REASON_LEN 80
-	char tz_restart_reason[HTC_DEBUG_TZ_REASON_LEN];
-#endif
 
 	if (subsys_get_crash_status(d->subsys))
 		return IRQ_HANDLED;
-
-#if defined(CONFIG_HTC_DEBUG_SSR)
-	memset(tz_restart_reason, 0, sizeof(tz_restart_reason));
-	snprintf(tz_restart_reason, sizeof(tz_restart_reason)-1, "Watchdog bite received from %s",d->subsys_desc.name);
-	subsys_set_restart_reason(d->subsys, tz_restart_reason);
-#endif
 
 	pr_err("Watchdog bite received from %s!\n", d->subsys_desc.name);
 

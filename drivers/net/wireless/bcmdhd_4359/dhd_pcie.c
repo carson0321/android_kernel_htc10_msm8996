@@ -493,7 +493,7 @@ dhdpcie_bus_intstatus(dhd_bus_t *bus)
 				struct irq_desc *desc;
 
 				desc = irq_to_desc(bus->dev->irq);
-				if (desc != NULL && desc->depth == 0) {
+				if (desc->depth == 0) {
 					DHD_INTR(("%s disable_irq_nosync irq=%d\n", __FUNCTION__,
 						bus->dev->irq));
 					disable_irq_nosync(bus->dev->irq);
@@ -542,41 +542,13 @@ dhdpcie_bus_isr(dhd_bus_t *bus)
 			break;
 		}
 
-		/* Count the interrupt call */
-		bus->intrcount++;
-#ifdef CUSTOMER_HW_ONE
-		if (bus->irq_lastintrs == 0) {
-			bus->irq_lastintrs = bus->intrcount;
-			bus->irq_record_time = ((uint32)jiffies_to_msecs(jiffies));
-		} else {
-			if((((uint32)jiffies_to_msecs(jiffies)) - bus->irq_record_time) > 1000 /* 1s */) {
-				uint32 intrdiff = bus->intrcount - bus->irq_lastintrs;
-				DHD_INFO(("%s : intr DIFF is %d\n",
-							__FUNCTION__, intrdiff));
-				if(intrdiff > 10000) {
-					/* disable host IRQ */
-					if (bus && bus->dev && bus->dev->irq) {
-						struct irq_desc *desc;
-						desc = irq_to_desc(bus->dev->irq);
-						if (desc->depth == 0) {
-							DHD_INTR(("%s disable_irq_nosync irq=%d\n", __FUNCTION__,
-										bus->dev->irq));
-							disable_irq_nosync(bus->dev->irq);
-							bus->intdis = TRUE;
-						}
-					}
-					dhd_os_send_hang_message(bus->dhd);
-				}
-				bus->irq_lastintrs = 0;
-			}
-		}
-#endif /* CUSTOMER_HW_ONE */
-
+#ifndef CUSTOMER_HW_ONE
 		if (bus->dhd->busstate == DHD_BUS_DOWN) {
 			DHD_ERROR(("%s: BUS is down, not processing the interrupt \r\n",
 				__FUNCTION__));
 			break;
 		}
+#endif /* CUSTOMER_HW_ONE */
 
 		intstatus = dhdpcie_bus_intstatus(bus);
 
@@ -595,6 +567,8 @@ dhdpcie_bus_isr(dhd_bus_t *bus)
 		 *    - Reenable interrupts (as per state)
 		 */
 
+		/* Count the interrupt call */
+		bus->intrcount++;
 #ifdef CUSTOMER_HW_ONE
 			if (bus->ipend && bus->intdis) {
 				if (bus->lastintrs == 0) {
@@ -775,9 +749,6 @@ dhdpcie_dongle_attach(dhd_bus_t *bus)
 	bus->wait_for_d3_ack = 1;
 	bus->suspended = FALSE;
 	bus->force_suspend = 0;
-	bus->intrcount = 0;
-	bus->irq_lastintrs = 0;
-	bus->irq_record_time = 0;
 
 #ifdef PCIE_OOB
 	gpio_handle_val = get_handle(OOB_PORT);
@@ -839,7 +810,7 @@ dhdpcie_bus_intr_enable(dhd_bus_t *bus)
 #ifdef CUSTOMER_HW_ONE
 		if (bus && bus->dev && bus->dev->irq) {
 			struct irq_desc *desc = irq_to_desc(bus->dev->irq);
-			if (desc != NULL && desc->depth > 0) {
+			if (desc->depth > 0) {
 				DHD_INTR(("%s enable_irq irq=%d\n", __FUNCTION__,
 					bus->dev->irq));
 				enable_irq(bus->dev->irq);
@@ -881,7 +852,7 @@ dhdpcie_bus_intr_disable(dhd_bus_t *bus)
 #ifdef CUSTOMER_HW_ONE
 		if (bus && bus->dev && bus->dev->irq) {
 			struct irq_desc *desc = irq_to_desc(bus->dev->irq);
-			if (desc != NULL && desc->depth == 0) {
+			if (desc->depth == 0) {
 				DHD_INTR(("%s disable_irq_nosync irq=%d\n", __FUNCTION__,
 					bus->dev->irq));
 				disable_irq_nosync(bus->dev->irq);

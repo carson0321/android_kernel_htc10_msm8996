@@ -30,7 +30,6 @@
 #include "ext4_jbd2.h"
 #include "xattr.h"
 #include "acl.h"
-#include <trace/events/mmcio.h>
 
 /*
  * Called when an inode is released. Note that this is different
@@ -120,8 +119,6 @@ ext4_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (file->f_flags & O_APPEND)
 		iocb->ki_pos = pos = i_size_read(inode);
 
-	trace_ext4_file_write(iocb->ki_filp->f_path.dentry, iocb->ki_nbytes);
-
 	/*
 	 * If we have encountered a bitmap-format file, the size limit
 	 * is smaller than s_maxbytes, which is for extent-mapped files.
@@ -203,15 +200,6 @@ static const struct vm_operations_struct ext4_file_vm_ops = {
 
 static int ext4_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
-	struct inode *inode = file->f_mapping->host;
-
-	if (ext4_encrypted_inode(inode)) {
-		int err = ext4_get_encryption_info(inode);
-		if (err)
-			return 0;
-		if (ext4_encryption_info(inode) == NULL)
-			return -ENOKEY;
-	}
 	file_accessed(file);
 	vma->vm_ops = &ext4_file_vm_ops;
 	return 0;
@@ -224,7 +212,6 @@ static int ext4_file_open(struct inode * inode, struct file * filp)
 	struct vfsmount *mnt = filp->f_path.mnt;
 	struct path path;
 	char buf[64], *cp;
-	int ret;
 
 	if (unlikely(!(sbi->s_mount_flags & EXT4_MF_MNTDIR_SAMPLED) &&
 		     !(sb->s_flags & MS_RDONLY))) {
@@ -258,19 +245,12 @@ static int ext4_file_open(struct inode * inode, struct file * filp)
 			ext4_journal_stop(handle);
 		}
 	}
-	if (ext4_encrypted_inode(inode)) {
-		ret = ext4_get_encryption_info(inode);
-		if (ret)
-			return -EACCES;
-		if (ext4_encryption_info(inode) == NULL)
-			return -ENOKEY;
-	}
 	/*
 	 * Set up the jbd2_inode if we are opening the inode for
 	 * writing and the journal is present
 	 */
 	if (filp->f_mode & FMODE_WRITE) {
-		ret = ext4_inode_attach_jinode(inode);
+		int ret = ext4_inode_attach_jinode(inode);
 		if (ret < 0)
 			return ret;
 	}
@@ -323,26 +303,46 @@ static int ext4_find_unwritten_pgoff(struct inode *inode,
 		num = min_t(pgoff_t, end - index, PAGEVEC_SIZE);
 		nr_pages = pagevec_lookup(&pvec, inode->i_mapping, index,
 					  (pgoff_t)num);
-		if (nr_pages == 0)
+		if (nr_pages == 0) {
+			if (whence == SEEK_DATA)
+				break;
+
+			BUG_ON(whence != SEEK_HOLE);
+			/*
+			 * If this is the first time to go into the loop and
+			 * offset is not beyond the end offset, it will be a
+			 * hole at this offset
+			 */
+			if (lastoff == startoff || lastoff < endoff)
+				found = 1;
 			break;
+		}
+
+		/*
+		 * If this is the first time to go into the loop and
+		 * offset is smaller than the first page offset, it will be a
+		 * hole at this offset.
+		 */
+		if (lastoff == startoff && whence == SEEK_HOLE &&
+		    lastoff < page_offset(pvec.pages[0])) {
+			found = 1;
+			break;
+		}
 
 		for (i = 0; i < nr_pages; i++) {
 			struct page *page = pvec.pages[i];
 			struct buffer_head *bh, *head;
 
 			/*
-			 * If current offset is smaller than the page offset,
-			 * there is a hole at this offset.
+			 * If the current offset is not beyond the end of given
+			 * range, it will be a hole.
 			 */
-			if (whence == SEEK_HOLE && lastoff < endoff &&
-			    lastoff < page_offset(pvec.pages[i])) {
+			if (lastoff < endoff && whence == SEEK_HOLE &&
+			    page->index > end) {
 				found = 1;
 				*offset = lastoff;
 				goto out;
 			}
-
-			if (page->index > end)
-				goto out;
 
 			lock_page(page);
 
@@ -360,8 +360,6 @@ static int ext4_find_unwritten_pgoff(struct inode *inode,
 				lastoff = page_offset(page);
 				bh = head = page_buffers(page);
 				do {
-					if (lastoff + bh->b_size <= startoff)
-						goto next;
 					if (buffer_uptodate(bh) ||
 					    buffer_unwritten(bh)) {
 						if (whence == SEEK_DATA)
@@ -376,7 +374,6 @@ static int ext4_find_unwritten_pgoff(struct inode *inode,
 						unlock_page(page);
 						goto out;
 					}
-next:
 					lastoff += bh->b_size;
 					bh = bh->b_this_page;
 				} while (bh != head);
@@ -386,18 +383,20 @@ next:
 			unlock_page(page);
 		}
 
-		/* The no. of pages is less than our desired, we are done. */
-		if (nr_pages < num)
+		/*
+		 * The no. of pages is less than our desired, that would be a
+		 * hole in there.
+		 */
+		if (nr_pages < num && whence == SEEK_HOLE) {
+			found = 1;
+			*offset = lastoff;
 			break;
+		}
 
 		index = pvec.pages[i - 1]->index + 1;
 		pagevec_release(&pvec);
 	} while (index <= end);
 
-	if (whence == SEEK_HOLE && lastoff < endoff) {
-		found = 1;
-		*offset = lastoff;
-	}
 out:
 	pagevec_release(&pvec);
 	return found;

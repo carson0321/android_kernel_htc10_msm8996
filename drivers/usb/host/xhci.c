@@ -115,20 +115,17 @@ int xhci_halt(struct xhci_hcd *xhci)
 			STS_HALT, STS_HALT, XHCI_MAX_HALT_USEC);
 	if (!ret) {
 		xhci->xhc_state |= XHCI_STATE_HALTED;
-	} else {
+		xhci->cmd_ring_state = CMD_RING_STATE_STOPPED;
+
+		if (timer_pending(&xhci->cmd_timer)) {
+			xhci_dbg_trace(xhci, trace_xhci_dbg_init,
+					"Cleanup command queue");
+			del_timer(&xhci->cmd_timer);
+			xhci_cleanup_command_queue(xhci);
+		}
+	} else
 		xhci_warn(xhci, "Host not halted after %u microseconds.\n",
 				XHCI_MAX_HALT_USEC);
-	}
-
-	xhci->cmd_ring_state = CMD_RING_STATE_STOPPED;
-
-	if (timer_pending(&xhci->cmd_timer)) {
-		xhci_dbg_trace(xhci, trace_xhci_dbg_init,
-				"Cleanup command queue");
-		del_timer(&xhci->cmd_timer);
-		xhci_cleanup_command_queue(xhci);
-	}
-
 	return ret;
 }
 
@@ -4988,8 +4985,8 @@ dma_addr_t xhci_get_sec_event_ring_dma_addr(struct usb_hcd *hcd,
 {
 	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
 
-	if (intr_num > xhci->max_interrupters) {
-		xhci_err(xhci, "intr num %d > max intrs %d\n", intr_num,
+	if (intr_num >= xhci->max_interrupters) {
+		xhci_err(xhci, "intr num %d >= max intrs %d\n", intr_num,
 			xhci->max_interrupters);
 		return 0;
 	}

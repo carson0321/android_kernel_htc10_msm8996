@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -29,10 +29,6 @@
 #include <linux/regulator/machine.h>
 #include <linux/regulator/of_regulator.h>
 #include <linux/qpnp/power-on.h>
-#ifdef CONFIG_HTC_POWER_DEBUG
-#include <linux/htc_flags.h>
-#include <linux/reboot.h>
-#endif
 #include <soc/qcom/rpm-smd.h>
 
 #include <../../power/reset/htc_restart_handler.h>
@@ -114,7 +110,6 @@
 #define QPNP_PON_S2_CNTL_EN			BIT(7)
 #define QPNP_PON_S2_RESET_ENABLE		BIT(7)
 #define QPNP_PON_DELAY_BIT_SHIFT		6
-#define QPNP_PON_GEN2_DELAY_BIT_SHIFT		14
 
 #define QPNP_PON_S1_TIMER_MASK			(0xF)
 #define QPNP_PON_S2_TIMER_MASK			(0x7)
@@ -155,17 +150,12 @@
 #define PON_S1_COUNT_MAX			0xF
 #define QPNP_PON_MIN_DBC_US			(USEC_PER_SEC / 64)
 #define QPNP_PON_MAX_DBC_US			(USEC_PER_SEC * 2)
-#define QPNP_PON_GEN2_MIN_DBC_US		62
-#define QPNP_PON_GEN2_MAX_DBC_US		(USEC_PER_SEC / 4)
 
 #define QPNP_KEY_STATUS_DELAY			msecs_to_jiffies(250)
 
 #define QPNP_PON_BUFFER_SIZE			9
 
 #define QPNP_POFF_REASON_UVLO			13
-
-/* Wakeup event timeout */
-#define WAKEUP_TIMEOUT_MSEC			3000
 
 enum qpnp_pon_version {
 	QPNP_PON_GEN1_V1,
@@ -657,31 +647,23 @@ int qpnp_pon_set_s3_timer(u32 s3_debounce)
 static int qpnp_pon_set_dbc(struct qpnp_pon *pon, u32 delay)
 {
 	int rc = 0;
-	u32 val;
+	u32 delay_reg;
 
 	if (delay == pon->dbc_time_us)
 		goto out;
-
 	if (pon->pon_input)
 		mutex_lock(&pon->pon_input->mutex);
 
-	if (is_pon_gen2(pon)) {
-		if (delay < QPNP_PON_GEN2_MIN_DBC_US)
-			delay = QPNP_PON_GEN2_MIN_DBC_US;
-		else if (delay > QPNP_PON_GEN2_MAX_DBC_US)
-			delay = QPNP_PON_GEN2_MAX_DBC_US;
-		val = (delay << QPNP_PON_GEN2_DELAY_BIT_SHIFT) / USEC_PER_SEC;
-	} else {
-		if (delay < QPNP_PON_MIN_DBC_US)
-			delay = QPNP_PON_MIN_DBC_US;
-		else if (delay > QPNP_PON_MAX_DBC_US)
-			delay = QPNP_PON_MAX_DBC_US;
-		val = (delay << QPNP_PON_DELAY_BIT_SHIFT) / USEC_PER_SEC;
-	}
+	if (delay < QPNP_PON_MIN_DBC_US)
+		delay = QPNP_PON_MIN_DBC_US;
+	else if (delay > QPNP_PON_MAX_DBC_US)
+		delay = QPNP_PON_MAX_DBC_US;
 
-	val = ilog2(val);
+	delay_reg = (delay << QPNP_PON_DELAY_BIT_SHIFT) / USEC_PER_SEC;
+	delay_reg = ilog2(delay_reg);
 	rc = qpnp_pon_masked_write(pon, QPNP_PON_DBC_CTL(pon),
-					QPNP_PON_DBC_DELAY_MASK(pon), val);
+					QPNP_PON_DBC_DELAY_MASK(pon),
+					delay_reg);
 	if (rc) {
 		dev_err(&pon->spmi->dev, "Unable to set PON debounce\n");
 		goto unlock;
@@ -709,12 +691,8 @@ static int qpnp_pon_get_dbc(struct qpnp_pon *pon, u32 *delay)
 	}
 	val &= QPNP_PON_DBC_DELAY_MASK(pon);
 
-	if (is_pon_gen2(pon))
-		*delay = USEC_PER_SEC /
-			(1 << (QPNP_PON_GEN2_DELAY_BIT_SHIFT - val));
-	else
-		*delay = USEC_PER_SEC /
-			(1 << (QPNP_PON_DELAY_BIT_SHIFT - val));
+	*delay = USEC_PER_SEC /
+		(1 << (QPNP_PON_DELAY_BIT_SHIFT - val));
 
 	return rc;
 }
@@ -956,102 +934,6 @@ int qpnp_pon_wd_config(bool enable)
 }
 EXPORT_SYMBOL(qpnp_pon_wd_config);
 
-#ifdef CONFIG_HTC_POWER_DEBUG
-static int qpnp_pon_readl(struct qpnp_pon *pon, u16 addr, u8 *reg)
-{
-	int rc = 0;
-
-	rc = spmi_ext_register_readl(pon->spmi->ctrl, pon->spmi->sid,
-			addr, reg, 1);
-	if (rc) {
-		dev_err(&pon->spmi->dev,
-			"Unable to read addr=%x, rc(%d)\n",
-			QPNP_PON_REVISION2(pon), rc);
-		return rc;
-	}
-
-	return rc;
-}
-
-#define SID_PMI 2
-static int qpnp_pon_readl_for_pmi(struct qpnp_pon *pon, u16 addr, u8 *reg)
-{
-	int rc = 0;
-
-	rc = spmi_ext_register_readl(pon->spmi->ctrl, SID_PMI,
-			addr, reg, 1);
-	if (rc) {
-		dev_err(&pon->spmi->dev,
-			"Unable to read addr=%x, rc(%d)\n",
-			QPNP_PON_REVISION2(pon), rc);
-		return rc;
-	}
-
-	return rc;
-}
-
-static u8 htc_dump_pon_reg[] =
-{
-	0x40,	/* PON_KPDPWR_N_RESET_S1_TIMER */
-	0x41,	/* PON_KPDPWR_N_RESET_S2_TIMER */
-	0x42,	/* PON_KPDPWR_N_RESET_S2_CTL */
-	0x43,	/* PON_KPDPWR_N_RESET_S2_CTL2 */
-	0x44,	/* PON_RESIN_N_RESET_S1_TIMER */
-	0x45,	/* PON_RESIN_N_RESET_S2_TIMER */
-	0x46,	/* PON_RESIN_N_RESET_S2_CTL */
-	0x47,	/* PON_RESIN_N_RESET_S2_CTL2 */
-	0x48,	/* PON_RESIN_AND_KPDPWR_RESET_S1_TIMER */
-	0x49,	/* PON_RESIN_AND_KPDPWR_RESET_S2_TIMER */
-	0x4A,	/* PON_RESIN_AND_KPDPWR_RESET_S2_CTL */
-	0x4B,	/* PON_RESIN_AND_KPDPWR_RESET_S2_CTL2 */
-	0x4C,	/* PON_GP2_RESET_S1_TIMER */
-	0x4D,	/* PON_GP2_RESET_S2_TIMER */
-	0x4E,	/* PON_GP2_RESET_S2_CTL */
-	0x4F,	/* PON_GP2_RESET_S2_CTL2 */
-	0x50,	/* PON_GP1_RESET_S1_TIMER */
-	0x51,	/* PON_GP1_RESET_S2_TIMER */
-	0x52,	/* PON_GP1_RESET_S2_CTL */
-	0x53,	/* PON_GP1_RESET_S2_CTL2 */
-	0x54,	/* PON_PMIC_WD_RESET_S1_TIMER */
-	0x55,	/* PON_PMIC_WD_RESET_S2_TIMER */
-	0x56,	/* PON_PMIC_WD_RESET_S2_CTL */
-	0x57,	/* PON_PMIC_WD_RESET_S2_CTL2 */
-	0x58,	/* PON_PMIC_WD_RESET_PET */
-	0x5A,	/* PON_PS_HOLD_RESET_CTL */
-	0x5B,	/* PON_PS_HOLD_RESET_CTL2 */
-	0x62,	/* PON_SW_RESET_S2_CTL */
-	0x63,	/* PON_SW_RESET_S2_CTL2 */
-	0x64,	/* PON_SW_RESET_GO */
-	0x66,	/* PON_OVERTEMP_RESET_CTL */
-	0x67,	/* PON_OVERTEMP_RESET_CTL2 */
-	0x70,	/* PON_PULL_CTL */
-	0x71,	/* PON_DEBOUNCE_CTL */
-	0x74,	/* PON_RESET_S3_SRC */
-	0x75,	/* PON_RESET_S3_TIMER */
-	0x80,	/* PON_PON_TRIGGER_EN */
-	0x83,	/* PON_WATCHDOG_LOCK */
-	0x88,	/* PON_UVLO */
-	0xff
-};
-
-void debug_htc_dump_pon_reg(void)
-{
-	struct qpnp_pon *pon = sys_reset_dev;
-	int i = 0;
-	u8 offset = 0;
-	u8 pm_reg = 0, pmi_reg = 0;
-
-	for( i = 0; htc_dump_pon_reg[i] != 0xff; i++)
-	{
-		offset = htc_dump_pon_reg[i];
-		qpnp_pon_readl(pon, pon->base + (u16)offset, &pm_reg);
-		qpnp_pon_readl_for_pmi(pon, pon->base + (u16)offset, &pmi_reg);
-		pr_info("PON 0x%X: 0x%X 0x%X\n", pon->base + offset, pm_reg, pmi_reg);
-	}
-	pr_info("End of dump PMIC PON.\n");
-}
-#endif
-
 static int qpnp_pon_get_trigger_config(enum pon_trigger_source pon_src,
 							bool *enabled)
 {
@@ -1203,9 +1085,6 @@ qpnp_pon_input_dispatch(struct qpnp_pon *pon, u32 pon_type)
 	if (!cfg->key_code)
 		return 0;
 
-	if (device_may_wakeup(&pon->spmi->dev))
-		pm_wakeup_event(&pon->spmi->dev, WAKEUP_TIMEOUT_MSEC);
-
 	if (pon->kpdpwr_dbc_enable && cfg->pon_type == PON_KPDPWR) {
 		elapsed_us = ktime_us_delta(ktime_get(),
 				pon->kpdpwr_last_release_time);
@@ -1294,107 +1173,12 @@ static irqreturn_t qpnp_resin_irq(int irq, void *_pon)
 	return IRQ_HANDLED;
 }
 
-#ifdef CONFIG_HTC_POWER_DEBUG
-struct pmic_dump_ranges {
-	const char *name;
-	unsigned char	sid_sel;
-	unsigned short	addr_start;
-	unsigned int	length;
-};
-
-#define PMIC_REG_DUMP_RANGE(_name, _sid_sel, _addr_start, _length) \
-	{ \
-		.name	= _name, \
-		.sid_sel	= _sid_sel, \
-		.addr_start	= _addr_start, \
-		.length	= _length, \
-	}
-
-static struct pmic_dump_ranges htc_dump_ranges[] = {
-	/* name, sid_sel, addr_start, length */
-	PMIC_REG_DUMP_RANGE("PM_PON", 0, 0x800,  0x91),
-	PMIC_REG_DUMP_RANGE("PMI_PON", 2, 0x800, 0x91),
-	PMIC_REG_DUMP_RANGE("PMI_Charger_1", 2, 0x1000,  0x4FF),
-	PMIC_REG_DUMP_RANGE("PMI_Charger_2", 2, 0x1600, 0xFF),
-	PMIC_REG_DUMP_RANGE("PMI_Fuel_Gauge", 2, 0x4000, 0x4E4)
-};
-
-#define DUMP_COLS 16
-void pmic_reg_hexdump(unsigned char sid, unsigned short addr, unsigned int dump_len)
-{
-	struct qpnp_pon *pon = sys_reset_dev;
-	int i, buffer_size, end_col, rc = 0;
-	char buffer[DUMP_COLS * 4 + 9]; // register length: 4, address length: 9
-	unsigned char reg = 0;
-	ssize_t len, ret = 0;
-
-	buffer_size = sizeof(buffer);
-	end_col = DUMP_COLS -1;
-	dump_len += ((dump_len % DUMP_COLS) ? (DUMP_COLS - dump_len % DUMP_COLS) : 0);
-
-	for(i = 0; i < dump_len; i++)
-	{
-		/* Show address offest */
-		if(i % DUMP_COLS == 0) {
-			len = snprintf(buffer + ret, buffer_size - ret, "0x%06x: ", addr + i);
-			ret += len;
-		}
-
-		/* Query PMIC register data */
-		if(i < dump_len) {
-			rc = spmi_ext_register_readl(pon->spmi->ctrl, sid,
-					addr+i, &reg, 1);
-			if (rc) {
-				dev_err(&pon->spmi->dev,
-					"Unable to read addr=%x, rc(%d)\n",
-					addr + i, rc);
-			}
-			len = snprintf(buffer + ret, buffer_size - ret, "%02x ", 0xFF & reg);
-			ret += len;
-		}
-
-		/* Print PMIC register data */
-		if(i % DUMP_COLS == end_col) {
-			printk(KERN_INFO "%s\n", buffer);
-			len = 0;
-			ret = 0;
-		}
-	}
-}
-
-static void do_htc_pmic_reg_dump(void)
-{
-	int i;
-	for(i = 0; i < ARRAY_SIZE(htc_dump_ranges); i++)
-	{
-		printk(KERN_INFO "++++++ %s start_addr=0x%06x, len=0x%06x ++++++\n",
-			htc_dump_ranges[i].name, htc_dump_ranges[i].addr_start, htc_dump_ranges[i].length);
-		pmic_reg_hexdump(htc_dump_ranges[i].sid_sel, htc_dump_ranges[i].addr_start, htc_dump_ranges[i].length);
-		printk(KERN_INFO "------ %s start_addr=0x%06x, len=0x%06x ------\n",
-			htc_dump_ranges[i].name, htc_dump_ranges[i].addr_start, htc_dump_ranges[i].length);
-	}
-}
-#endif
-
 static irqreturn_t qpnp_kpdpwr_resin_bark_irq(int irq, void *_pon)
 {
 	struct qpnp_pon *pon = _pon;
 
 	dev_err(&pon->spmi->dev, "Long press power key: kpdpwer+resin bark\r\n");
 	set_restart_action(RESTART_REASON_RAMDUMP, "Powerkey Hard Reset");
-#ifdef CONFIG_HTC_POWER_DEBUG
-	if (get_kernel_flag() & KERNEL_FLAG_PM_MONITOR) {
-		/* 1. disable Stage 2 reset first */
-		if (qpnp_get_s2_en(PON_KPDPWR_RESIN) > 0)
-		qpnp_config_s2_enable(PON_KPDPWR_RESIN, 0);
-
-		/* 2. Getting start to dump */
-		do_htc_pmic_reg_dump();
-
-		/* 3. Trigger S/W reset */
-		machine_restart("force-dog-bark");
-	}
-#endif
 	return IRQ_HANDLED;
 }
 
@@ -2467,21 +2251,8 @@ static int qpnp_pon_debugfs_uvlo_set(void *data, u64 val)
 	return 0;
 }
 
-#ifdef CONFIG_HTC_POWER_DEBUG
-static int htc_dump_pmic_reg_get(void *data, u64 *val)
-{
-	do_htc_pmic_reg_dump();
-	return 0;
-}
-#endif
-
 DEFINE_SIMPLE_ATTRIBUTE(qpnp_pon_debugfs_uvlo_fops, qpnp_pon_debugfs_uvlo_get,
 			qpnp_pon_debugfs_uvlo_set, "0x%02llx\n");
-
-#ifdef CONFIG_HTC_POWER_DEBUG
-DEFINE_SIMPLE_ATTRIBUTE(htc_dump_pmic_reg_fops, htc_dump_pmic_reg_get,
-			NULL, "0x%02llx\n");
-#endif
 
 static void qpnp_pon_debugfs_init(struct spmi_device *spmi)
 {
@@ -2497,13 +2268,6 @@ static void qpnp_pon_debugfs_init(struct spmi_device *spmi)
 				pon->debugfs, pon, &qpnp_pon_debugfs_uvlo_fops);
 		if (!ent)
 			dev_err(&pon->spmi->dev, "Unable to create uvlo_panic debugfs file.\n");
-#ifdef CONFIG_HTC_POWER_DEBUG
-		ent = debugfs_create_file("dump_pmic_reg",
-				S_IFREG | S_IWUSR | S_IRUGO,
-				pon->debugfs, pon, &htc_dump_pmic_reg_fops);
-		if (!ent)
-			dev_err(&pon->spmi->dev, "Unable to create dump_pmic_reg debugfs file.\n");
-#endif
 	}
 }
 

@@ -333,7 +333,6 @@ static inline int get_nohz_timer_target(int pinned)
  * Only dump TASK_* tasks. (0 for all tasks)
  */
 extern void show_state_filter(unsigned long state_filter);
-extern void show_thread_group_state_filter(const char *tg_comm, unsigned long state_filter);
 
 static inline void show_state(void)
 {
@@ -753,16 +752,6 @@ struct signal_struct {
 #define SIGNAL_CLD_MASK		(SIGNAL_CLD_STOPPED|SIGNAL_CLD_CONTINUED)
 
 #define SIGNAL_UNKILLABLE	0x00000040 /* for init: ignore fatal signals */
-
-#define SIGNAL_STOP_MASK (SIGNAL_CLD_MASK | SIGNAL_STOP_STOPPED | \
-			  SIGNAL_STOP_CONTINUED)
-
-static inline void signal_set_stop_flags(struct signal_struct *sig,
-					 unsigned int flags)
-{
-	WARN_ON(sig->flags & (SIGNAL_GROUP_EXIT|SIGNAL_GROUP_COREDUMP));
-	sig->flags = (sig->flags & ~SIGNAL_STOP_MASK) | flags;
-}
 
 /* If true, all threads except ->group_exit_task have pending SIGKILL */
 static inline int signal_group_exit(const struct signal_struct *sig)
@@ -1429,7 +1418,6 @@ struct task_struct {
 
 	unsigned long atomic_flags; /* Flags needing atomic access. */
 
-	struct restart_block restart_block;
 	pid_t pid;
 	pid_t tgid;
 
@@ -1563,8 +1551,6 @@ struct task_struct {
 #ifdef CONFIG_DEBUG_MUTEXES
 	/* mutex deadlock detection */
 	struct mutex_waiter *blocked_on;
-	struct task_struct  *blocked_by;
-	unsigned long        blocked_since;
 #endif
 #ifdef CONFIG_TRACE_IRQFLAGS
 	unsigned int irq_events;
@@ -1696,6 +1682,7 @@ struct task_struct {
 	 */
 	unsigned long numa_faults_locality[2];
 
+	unsigned long numa_pages_migrated;
 #endif /* CONFIG_NUMA_BALANCING */
 
 	struct rcu_head rcu;
@@ -1756,17 +1743,6 @@ struct task_struct {
 	/* bitmask and counter of trace recursion */
 	unsigned long trace_recursion;
 #endif /* CONFIG_TRACING */
-#ifdef CONFIG_KCOV
-	/* Coverage collection mode enabled for this task (0 if disabled). */
-	enum kcov_mode kcov_mode;
-	/* Size of the kcov_area. */
-	unsigned	kcov_size;
-	/* Buffer for coverage collection. */
-	void		*kcov_area;
-	/* kcov desciptor wired with this task or NULL. */
-	struct kcov	*kcov;
-#endif
-
 #ifdef CONFIG_MEMCG /* memcg uses this to do batch job */
 	unsigned int memcg_kmem_skip_account;
 	struct memcg_oom_info {
@@ -1887,15 +1863,13 @@ static inline pid_t task_tgid_nr(struct task_struct *tsk)
 	return tsk->tgid;
 }
 
-static inline pid_t task_tgid_nr_ns(struct task_struct *tsk, struct pid_namespace *ns)
-{
-	return __task_pid_nr_ns(tsk, __PIDTYPE_TGID, ns);
-}
+pid_t task_tgid_nr_ns(struct task_struct *tsk, struct pid_namespace *ns);
 
 static inline pid_t task_tgid_vnr(struct task_struct *tsk)
 {
-	return __task_pid_nr_ns(tsk, __PIDTYPE_TGID, NULL);
+	return pid_vnr(task_tgid(tsk));
 }
+
 
 static inline int pid_alive(const struct task_struct *p);
 static inline pid_t task_ppid_nr_ns(const struct task_struct *tsk, struct pid_namespace *ns)
@@ -2249,8 +2223,6 @@ extern int sched_set_static_cpu_pwr_cost(int cpu, unsigned int cost);
 extern unsigned int sched_get_static_cpu_pwr_cost(int cpu);
 extern int sched_set_static_cluster_pwr_cost(int cpu, unsigned int cost);
 extern unsigned int sched_get_static_cluster_pwr_cost(int cpu);
-extern int sched_set_cpu_budget(int cpu, int nr_run);
-extern int sched_get_cpu_budget(int cpu);
 extern void sched_set_cpu_cstate(int cpu, int cstate,
 			 int wakeup_energy, int wakeup_latency);
 extern void sched_set_cluster_dstate(const cpumask_t *cluster_cpus, int dstate,
@@ -3019,13 +2991,6 @@ static inline void cond_resched_rcu(void)
 #endif
 }
 
-#ifdef CONFIG_DEBUG_PREEMPT
-static inline unsigned long get_preempt_disable_ip(struct task_struct *p)
-{
-	return p->preempt_disable_ip;
-}
-#endif
-
 /*
  * Does a critical section need to be broken due to another
  * task waiting?: (technically does not depend on CONFIG_PREEMPT,
@@ -3162,6 +3127,11 @@ static inline unsigned int task_cpu(const struct task_struct *p)
 	return task_thread_info(p)->cpu;
 }
 
+static inline int task_node(const struct task_struct *p)
+{
+	return cpu_to_node(task_cpu(p));
+}
+
 extern void set_task_cpu(struct task_struct *p, unsigned int cpu);
 
 #else
@@ -3216,10 +3186,6 @@ static inline void inc_syscw(struct task_struct *tsk)
 {
 	tsk->ioac.syscw++;
 }
-static inline void inc_syscfs(struct task_struct *tsk)
-{
-	tsk->ioac.syscfs++;
-}
 #else
 static inline void add_rchar(struct task_struct *tsk, ssize_t amt)
 {
@@ -3234,9 +3200,6 @@ static inline void inc_syscr(struct task_struct *tsk)
 }
 
 static inline void inc_syscw(struct task_struct *tsk)
-{
-}
-static inline void inc_syscfs(struct task_struct *tsk)
 {
 }
 #endif

@@ -23,7 +23,7 @@ DEFINE_MSM_MUTEX(msm_actuator_mutex);
 #ifdef MSM_ACTUATOR_DEBUG
 #define CDBG(fmt, args...) pr_err(fmt, ##args)
 #else
-#define CDBG(fmt, args...) pr_debug("[CAM]"fmt, ##args)
+#define CDBG(fmt, args...) pr_debug(fmt, ##args)
 #endif
 
 #define PARK_LENS_LONG_STEP 7
@@ -1018,9 +1018,6 @@ static int32_t msm_actuator_bivcm_init_step_table(
 	uint16_t data_size = set_info->actuator_params.data_size;
 	uint16_t mask = 0, i = 0;
 	uint32_t qvalue = 0;
-//HTC_START
-	static int first = 0;
-//HTC_END
 	CDBG("Enter\n");
 
 	for (; data_size > 0; data_size--) {
@@ -1086,20 +1083,10 @@ static int32_t msm_actuator_bivcm_init_step_table(
 						step_index] =
 						max_code_size;
 			}
-//HTC_START
-			if(first == 0)
-			{
-			    pr_info("[CAM]step_position_table[%d] = %d (0x%x)\n", step_index, a_ctrl->step_position_table[step_index], a_ctrl->step_position_table[step_index]);
-			}
-//HTC_END
+			//CDBG("step_position_table[%d] = %d\n", step_index,
+			//	a_ctrl->step_position_table[step_index]);
 		}
 	}
-//HTC_START
-	if(first == 0)
-	{
-	first = 1;
-	}
-//HTC_END
 	CDBG("Exit\n");
 	return 0;
 }
@@ -1578,7 +1565,6 @@ static int32_t msm_actuator_set_param(struct msm_actuator_ctrl_t *a_ctrl,
 		return -EFAULT;
 	}
 
-
 	if (set_info->actuator_params.init_setting_size &&
 		set_info->actuator_params.init_setting_size
 		<= MAX_ACTUATOR_INIT_SET) {
@@ -2003,10 +1989,6 @@ static long msm_actuator_subdev_do_ioctl(
 			parg = &actuator_data;
 			break;
 		}
-		break;
-	case VIDIOC_MSM_ACTUATOR_CFG:
-		pr_err("%s: invalid cmd 0x%x received\n", __func__, cmd);
-		return -EINVAL;
 	}
 
 	rc = msm_actuator_subdev_ioctl(sd, cmd, parg);
@@ -2239,16 +2221,15 @@ static int32_t msm_actuator_platform_probe(struct platform_device *pdev)
 	}
 	rc = msm_sensor_driver_get_gpio_data(&(msm_actuator_t->gconf),
 		(&pdev->dev)->of_node);
-	if (-ENODEV == rc) {
-		pr_notice("No valid actuator GPIOs data\n");
-	} else if (rc < 0) {
-		pr_err("Error Actuator GPIOs\n");
+	if (rc < 0) {
+		pr_err("%s: No/Error Actuator GPIOs\n", __func__);
 	} else {
 		msm_actuator_t->cam_pinctrl_status = 1;
 		rc = msm_camera_pinctrl_init(
 			&(msm_actuator_t->pinctrl_info), &(pdev->dev));
 		if (rc < 0) {
-			pr_err("ERR: Error in reading actuator pinctrl\n");
+			pr_err("ERR:%s: Error in reading actuator pinctrl\n",
+				__func__);
 			msm_actuator_t->cam_pinctrl_status = 0;
 		}
 	}

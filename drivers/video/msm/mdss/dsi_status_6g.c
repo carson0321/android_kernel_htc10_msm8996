@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -14,7 +14,6 @@
 #include <linux/delay.h>
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
-#include <linux/interrupt.h>
 
 #include "mdss_dsi.h"
 #include "mdss_mdp.h"
@@ -23,7 +22,7 @@
  * mdss_check_te_status() - Check the status of panel for TE based ESD.
  * @ctrl_pdata   : dsi controller data
  * @pstatus_data : dsi status data
- * @interval     : duration in milliseconds for panel TE wait
+ * @interval     : duration in milliseconds to schedule work queue
  *
  * This function is called when the TE signal from the panel doesn't arrive
  * after 'interval' milliseconds. If the TE IRQ is not ready, the workqueue
@@ -34,25 +33,48 @@ static bool mdss_check_te_status(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
 {
 	bool ret;
 
-	atomic_set(&ctrl_pdata->te_irq_ready, 0);
-	reinit_completion(&ctrl_pdata->te_irq_comp);
-	enable_irq(gpio_to_irq(ctrl_pdata->disp_te_gpio));
-	/* Define TE interrupt timeout value as 3x(1/fps) */
-	ret = wait_for_completion_timeout(&ctrl_pdata->te_irq_comp,
+	/*
+	 * During resume, the panel status will be ON but due to race condition
+	 * between ESD thread and display UNBLANK (or rather can be put as
+	 * asynchronuous nature between these two threads), the ESD thread might
+	 * reach this point before the TE IRQ line is enabled or before the
+	 * first TE interrupt arrives after the TE IRQ line is enabled. For such
+	 * cases, re-schedule the ESD thread.
+	 */
+	ret = !atomic_read(&ctrl_pdata->te_irq_ready);
+	if (ret) {
+		schedule_delayed_work(&pstatus_data->check_status,
 			msecs_to_jiffies(interval));
-	disable_irq(gpio_to_irq(ctrl_pdata->disp_te_gpio));
-	pr_debug("%s: Panel TE check done with ret = %d\n", __func__, ret);
+		pr_debug("%s: TE IRQ line not enabled yet\n", __func__);
+	}
+
 	return ret;
 }
 
 /*
- * Return true if Vendor ESD check is fine
+ * Return true if TE checking is fine, next workqueue is scheduled as well.
  */
-static bool mdss_check_vendor_status(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
-		struct dsi_status_data *pstatus_data)
+static bool mdss_check_te_status_v2(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
+		struct dsi_status_data *pstatus_data, uint32_t interval)
 {
-	bool ret = !pstatus_data->vendor_esd_error;
-	pstatus_data->vendor_esd_error = false;
+	bool ret;
+	struct te_data *te = &(pstatus_data->te);
+
+	ret = !atomic_read(&ctrl_pdata->te_irq_ready);
+	if (ret) {
+		pr_info("%s: TE IRQ line not enabled yet\n", __func__);
+		msleep(50);
+		ret = atomic_read(&ctrl_pdata->te_irq_ready);
+	} else {
+		if (te->count < 2)
+			msleep(100);
+		pr_debug("%s: te_count=%d\n", __func__, te->count);
+		ret = te->count >=2 ? true : false;
+	}
+	if (ret) {
+		schedule_delayed_work(&pstatus_data->check_status,
+			msecs_to_jiffies(interval));
+	}
 
 	return ret;
 }
@@ -93,7 +115,7 @@ void mdss_check_dsi_ctrl_status(struct work_struct *work, uint32_t interval)
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 							panel_data);
 	if (!ctrl_pdata || (!ctrl_pdata->check_status &&
-		(ctrl_pdata->status_mode != ESD_TE && ctrl_pdata->status_mode != ESD_TE_V2 && ctrl_pdata->status_mode != ESD_VENDOR))) {
+		(ctrl_pdata->status_mode != ESD_TE && ctrl_pdata->status_mode != ESD_TE_V2))) {
 		pr_err("%s: DSI ctrl or status_check callback not available\n",
 								__func__);
 		return;
@@ -115,31 +137,20 @@ void mdss_check_dsi_ctrl_status(struct work_struct *work, uint32_t interval)
 		return;
 	}
 
-	if (!mdss_check_vendor_status(ctrl_pdata, pstatus_data))
-		goto status_dead;
-
 	if (ctrl_pdata->status_mode == ESD_TE) {
-		uint32_t fps = mdss_panel_get_framerate(&pdata->panel_info,
-							FPS_RESOLUTION_HZ);
-		uint32_t timeout = ((1000 / fps) + 1) *
-					MDSS_STATUS_TE_WAIT_MAX;
-
-		if (mdss_check_te_status(ctrl_pdata, pstatus_data, timeout))
-			goto sim;
+		if (mdss_check_te_status(ctrl_pdata, pstatus_data, interval))
+			return;
 		else
 			goto status_dead;
 	}
 
-	if (ctrl_pdata->status_mode == ESD_VENDOR) {
-		if (pdata->panel_info.panel_force_dead) {
-			pr_info("%s: ESD_VENDOR force_dead=%d\n", __func__, pdata->panel_info.panel_force_dead);
-			pdata->panel_info.panel_force_dead--;
-			if (!pdata->panel_info.panel_force_dead)
-				goto status_dead;
-		}
-
-		return;
+	if (ctrl_pdata->status_mode == ESD_TE_V2) {
+		if (mdss_check_te_status_v2(ctrl_pdata, pstatus_data, interval))
+			return;
+		else
+			goto status_dead;
 	}
+
 
 	/*
 	 * TODO: Because mdss_dsi_cmd_mdp_busy has made sure DMA to
@@ -197,7 +208,7 @@ void mdss_check_dsi_ctrl_status(struct work_struct *work, uint32_t interval)
 		else
 			goto status_dead;
 	}
-sim:
+
 	if (pdata->panel_info.panel_force_dead) {
 		pr_debug("force_dead=%d\n", pdata->panel_info.panel_force_dead);
 		pdata->panel_info.panel_force_dead--;

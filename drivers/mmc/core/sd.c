@@ -744,10 +744,15 @@ static int mmc_sd_init_uhs_card(struct mmc_card *card)
 	 * SPI mode doesn't define CMD19 and tuning is only valid for SDR50 and
 	 * SDR104 mode SD-cards. Note that tuning is mandatory for SDR104.
 	 */
-	if (!mmc_host_is_spi(card->host) &&
-	    (card->sd_bus_speed == UHS_SDR50_BUS_SPEED ||
-	     card->sd_bus_speed == UHS_SDR104_BUS_SPEED))
-		err = mmc_execute_tuning(card);
+	if (!mmc_host_is_spi(card->host) && card->host->ops->execute_tuning &&
+			(card->sd_bus_speed == UHS_SDR50_BUS_SPEED ||
+			 card->sd_bus_speed == UHS_SDR104_BUS_SPEED)) {
+		mmc_host_clk_hold(card->host);
+		err = card->host->ops->execute_tuning(card->host,
+						      MMC_SEND_TUNING_BLOCK);
+		mmc_host_clk_release(card->host);
+	}
+
 out:
 	kfree(status);
 
@@ -1160,17 +1165,7 @@ static void mmc_sd_detect(struct mmc_host *host)
 	BUG_ON(!host);
 	BUG_ON(!host->card);
 
-	/*
-	 * Try to acquire claim host. If failed to get the lock in 2 sec,
-	 * just return; This is to ensure that when this call is invoked
-	 * due to pm_suspend, not to block suspend for longer duration.
-	 */
-	pm_runtime_get_sync(&host->card->dev);
-	if (!mmc_try_claim_host(host, 2000)) {
-		pm_runtime_mark_last_busy(&host->card->dev);
-		pm_runtime_put_autosuspend(&host->card->dev);
-		return;
-	}
+	mmc_get_card(host->card);
 
 	/*
 	 * Just check if our card has been removed.
@@ -1186,8 +1181,6 @@ static void mmc_sd_detect(struct mmc_host *host)
 		mmc_detach_bus(host);
 		mmc_power_off(host);
 		mmc_release_host(host);
-		printk(KERN_ERR "%s %s removed %d times\n",
-			__func__, mmc_hostname(host), host->removed_cnt);
 	}
 }
 
@@ -1265,17 +1258,17 @@ static int _mmc_sd_resume(struct mmc_host *host)
 	if (!mmc_card_suspended(host->card))
 		goto out;
 
+	mmc_power_up(host, host->card->ocr);
 #ifdef CONFIG_MMC_PARANOID_SD_INIT
 	retries = 5;
 	delayTime = 5;
 	while (retries) {
+		err = mmc_sd_init_card(host, host->card->ocr, host->card);
 		if (host->ops->get_cd && host->ops->get_cd(host) == 0) {
 			printk(KERN_ERR "%s(%s): find no card (%d). Stop trying\n",
 				 __func__, mmc_hostname(host), err);
 			break;
 		}
-		mmc_power_up(host, host->card->ocr);
-		err = mmc_sd_init_card(host, host->card->ocr, host->card);
 
 		if (err) {
 			printk(KERN_ERR "%s: Re-init card rc = %d (retries = %d)\n",
@@ -1292,13 +1285,11 @@ static int _mmc_sd_resume(struct mmc_host *host)
 		break;
 	}
 #else
-	mmc_power_up(host, host->card->ocr);
 	err = mmc_sd_init_card(host, host->card->ocr, host->card);
 #endif
 	if (err) {
 		pr_err("%s: %s: mmc_sd_init_card_failed (%d)\n",
 				mmc_hostname(host), __func__, err);
-		mmc_power_off(host);
 		goto out;
 	}
 	mmc_card_clr_suspended(host->card);

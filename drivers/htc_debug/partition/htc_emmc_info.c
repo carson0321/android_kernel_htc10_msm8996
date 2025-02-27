@@ -148,12 +148,8 @@ static ssize_t htc_cancel_fsync_write(struct file *file, const char __user *buff
 		size_t count, loff_t *ppos)
 {
 	int val;
-	char buf[64];
 
-        if (copy_from_user(buf, buffer, 64))
-                return -EFAULT;
-
-	sscanf(buf, "%d", &val);
+	sscanf(buffer, "%d", &val);
 
 	if (val == 1) {
 		pr_info("Cancel fsync.\n");

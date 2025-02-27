@@ -2,7 +2,7 @@
  * drivers/serial/msm_serial.c - driver for msm7k serial device and console
  *
  * Copyright (C) 2007 Google, Inc.
- * Copyright (c) 2010-2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2010-2015, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -51,7 +51,6 @@
 #include <linux/platform_data/qcom-serial_hs_lite.h>
 #include <linux/msm-bus.h>
 #include "msm_serial_hs_hwreg.h"
-#include <linux/htc_flags.h>
 
 /*
  * There are 3 different kind of UART Core available on MSM.
@@ -95,8 +94,6 @@ struct msm_hsl_port {
 	/* BLSP UART required BUS Scaling data */
 	struct msm_bus_scale_pdata *bus_scale_table;
 };
-
-static int msm_serial_hsl_enable;
 
 #define UARTDM_VERSION_11_13	0
 #define UARTDM_VERSION_14	1
@@ -557,7 +554,6 @@ static void handle_rx(struct uart_port *port, unsigned int misr)
 	unsigned int vid;
 	unsigned int sr;
 	int count = 0;
-	int copied = 0;
 	struct msm_hsl_port *msm_hsl_port = UART_TO_MSM(port);
 
 	vid = msm_hsl_port->ver_id;
@@ -613,9 +609,9 @@ static void handle_rx(struct uart_port *port, unsigned int misr)
 
 		/* TODO: handle sysrq */
 		/* if (!uart_handle_sysrq_char(port, c)) */
-		copied = tty_insert_flip_string(tty->port, (char *) &c,
+		tty_insert_flip_string(tty->port, (char *) &c,
 				       (count > 4) ? 4 : count);
-		count -= copied;
+		count -= 4;
 	}
 
 	tty_flip_buffer_push(tty->port);
@@ -1703,13 +1699,6 @@ static int msm_serial_hsl_probe(struct platform_device *pdev)
 	u32 line;
 	int ret;
 
-#ifdef CONFIG_SERIAL_MSM_HSL_CONSOLE
-	if (!msm_serial_hsl_enable) {
-		pr_info("serial console disabled, do not proceed msm_serial_hsl_probe().\n");
-		return -ENODEV;
-	}
-#endif
-
 	if (pdev->id == -1)
 		pdev->id = atomic_inc_return(&msm_serial_hsl_next_id) - 1;
 
@@ -1971,10 +1960,6 @@ static struct platform_driver msm_hsl_platform_driver = {
 static int __init msm_serial_hsl_init(void)
 {
 	int ret;
-
-	/* Switch Uart Debug by Kernel Flag  */
-	if (get_kernel_flag() & KERNEL_FLAG_SERIAL_HSL_ENABLE)
-		msm_serial_hsl_enable = 1;
 
 	ret = uart_register_driver(&msm_hsl_uart_driver);
 	if (unlikely(ret))

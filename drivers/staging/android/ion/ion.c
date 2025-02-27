@@ -3,7 +3,7 @@
  * drivers/staging/android/ion/ion.c
  *
  * Copyright (C) 2011 Google, Inc.
- * Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -224,10 +224,10 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 			"heap->ops->map_dma should return ERR_PTR on error"))
 		table = ERR_PTR(-EINVAL);
 	if (IS_ERR(table)) {
-		ret = -EINVAL;
-		goto err1;
+		heap->ops->free(buffer);
+		kfree(buffer);
+		return ERR_CAST(table);
 	}
-
 	buffer->sg_table = table;
 	if (ion_buffer_fault_user_mappings(buffer)) {
 		int num_pages = PAGE_ALIGN(buffer->size) / PAGE_SIZE;
@@ -237,7 +237,7 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 		buffer->pages = vmalloc(sizeof(struct page *) * num_pages);
 		if (!buffer->pages) {
 			ret = -ENOMEM;
-			goto err;
+			goto err1;
 		}
 
 		for_each_sg(table->sgl, sg, table->nents, i) {
@@ -246,6 +246,9 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 			for (j = 0; j < sg->length / PAGE_SIZE; j++)
 				buffer->pages[k++] = page++;
 		}
+
+		if (ret)
+			goto err;
 	}
 
 	mutex_init(&buffer->lock);
@@ -269,8 +272,10 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 
 err:
 	heap->ops->unmap_dma(heap, buffer);
-err1:
 	heap->ops->free(buffer);
+err1:
+	if (buffer->pages)
+		vfree(buffer->pages);
 err2:
 	kfree(buffer);
 	return ERR_PTR(ret);
@@ -441,8 +446,7 @@ static void user_ion_handle_get(struct ion_handle *handle)
 }
 
 /* Must hold the client lock */
-static struct ion_handle *user_ion_handle_get_check_overflow(
-	struct ion_handle *handle)
+static struct ion_handle *user_ion_handle_get_check_overflow(struct ion_handle *handle)
 {
 	if (handle->user_ref_count + 1 == 0)
 		return ERR_PTR(-EOVERFLOW);
@@ -468,7 +472,7 @@ static struct ion_handle *pass_to_user(struct ion_handle *handle)
 /* Must hold the client lock */
 static int user_ion_handle_put_nolock(struct ion_handle *handle)
 {
-	int ret = 0;
+	int ret;
 
 	if (--handle->user_ref_count == 0)
 		ret = ion_handle_put_nolock(handle);
@@ -687,8 +691,8 @@ static void ion_free_nolock(struct ion_client *client, struct ion_handle *handle
 	ion_handle_put_nolock(handle);
 }
 
-static void user_ion_free_nolock(struct ion_client *client,
-				 struct ion_handle *handle)
+/* Must hold the client lock */
+static void user_ion_free_nolock(struct ion_client *client, struct ion_handle *handle)
 {
 	bool valid_handle;
 
@@ -1698,15 +1702,10 @@ static const struct file_operations ion_fops = {
 	.compat_ioctl   = compat_ion_ioctl,
 };
 
-struct ion_heap_total {
-	size_t vss;
-	size_t pss;
-};
-
-static struct ion_heap_total ion_debug_heap_total(struct ion_client *client,
+static size_t ion_debug_heap_total(struct ion_client *client,
 				   unsigned int id)
 {
-	struct ion_heap_total total = {.vss = 0, .pss = 0};
+	size_t size = 0;
 	struct rb_node *n;
 
 	mutex_lock(&client->lock);
@@ -1714,15 +1713,11 @@ static struct ion_heap_total ion_debug_heap_total(struct ion_client *client,
 		struct ion_handle *handle = rb_entry(n,
 						     struct ion_handle,
 						     node);
-		if (handle->buffer->heap->id == id) {
-			int handle_count = handle->buffer->handle_count;
-			if (handle_count)
-				total.pss += handle->buffer->size / handle_count;
-			total.vss += handle->buffer->size;
-		}
+		if (handle->buffer->heap->id == id)
+			size += handle->buffer->size;
 	}
 	mutex_unlock(&client->lock);
-	return total;
+	return size;
 }
 
 /**
@@ -1833,26 +1828,26 @@ static int ion_debug_heap_show(struct seq_file *s, void *unused)
 	size_t total_size = 0;
 	size_t total_orphaned_size = 0;
 
-	seq_printf(s, "%16s %16s %16s %16s\n", "client", "pid", "size(PSS)", "size(VSS)");
+	seq_printf(s, "%16.s %16.s %16.s\n", "client", "pid", "size");
 	seq_puts(s, "----------------------------------------------------\n");
 
 	down_read(&dev->lock);
 	for (n = rb_first(&dev->clients); n; n = rb_next(n)) {
 		struct ion_client *client = rb_entry(n, struct ion_client,
 						     node);
-		struct ion_heap_total total = ion_debug_heap_total(client, heap->id);
+		size_t size = ion_debug_heap_total(client, heap->id);
 
-		if (!total.vss)
+		if (!size)
 			continue;
 		if (client->task) {
 			char task_comm[TASK_COMM_LEN];
 
 			get_task_comm(task_comm, client->task);
-			seq_printf(s, "%16s %16u %16zu %16zu\n", task_comm,
-				   client->pid, total.pss, total.vss);
+			seq_printf(s, "%16.s %16u %16zu\n", task_comm,
+				   client->pid, size);
 		} else {
-			seq_printf(s, "%16s %16u %16zu %16zu\n", client->name,
-				   client->pid, total.pss, total.vss);
+			seq_printf(s, "%16.s %16u %16zu\n", client->name,
+				   client->pid, size);
 		}
 	}
 	up_read(&dev->lock);

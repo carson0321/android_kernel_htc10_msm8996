@@ -75,12 +75,10 @@ extern int *get_migratetype_fallbacks(int mtype);
 bool is_cma_pageblock(struct page *page);
 #  define is_migrate_cma(migratetype) unlikely((migratetype) == MIGRATE_CMA)
 #  define get_cma_migrate_type() MIGRATE_CMA
-#  define is_migrate_cma_page(_page) (get_pageblock_migratetype(_page) == MIGRATE_CMA)
 #else
 #  define is_cma_pageblock(page) false
 #  define is_migrate_cma(migratetype) false
 #  define get_cma_migrate_type() MIGRATE_MOVABLE
-#  define is_migrate_cma_page(_page) false
 #endif
 
 #define for_each_migratetype_order(order, type) \
@@ -903,9 +901,6 @@ static inline int is_highmem(struct zone *zone)
 
 /* These two functions are used to setup the per zone pages min values */
 struct ctl_table;
-extern int vm_inactive_ratio;
-int vm_inactive_ratio_handler(struct ctl_table *, int,
-	void __user *, size_t *, loff_t *);
 int min_free_kbytes_sysctl_handler(struct ctl_table *, int,
 					void __user *, size_t *, loff_t *);
 extern int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES-1];

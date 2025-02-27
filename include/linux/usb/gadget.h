@@ -40,7 +40,7 @@ enum gsi_ep_op {
 	GSI_EP_OP_STORE_DBL_INFO,
 	GSI_EP_OP_ENABLE_GSI,
 	GSI_EP_OP_UPDATEXFER,
-	GSI_EP_OP_RING_DB,
+	GSI_EP_OP_RING_IN_DB,
 	GSI_EP_OP_ENDXFER,
 	GSI_EP_OP_GET_CH_INFO,
 	GSI_EP_OP_GET_XFER_IDX,
@@ -1157,7 +1157,6 @@ struct usb_gadget_driver {
 	int			(*setup)(struct usb_gadget *,
 					const struct usb_ctrlrequest *);
 	void			(*disconnect)(struct usb_gadget *);
-	void			(*mute_disconnect)(struct usb_gadget *);   /*++ 2015/11/26 USB Team, PCN00043 ++*/
 	void			(*suspend)(struct usb_gadget *);
 	void			(*resume)(struct usb_gadget *);
 	void			(*reset)(struct usb_gadget *);

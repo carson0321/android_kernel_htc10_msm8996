@@ -333,7 +333,7 @@ static int ngd_xfer_msg(struct slim_controller *ctrl, struct slim_msg_txn *txn)
 	u8 la = txn->la;
 	u8 txn_mt;
 	u16 txn_mc = txn->mc;
-	u8 wbuf[SLIM_MSGQ_BUF_LEN] = {0}; //HTC_AUD klockwork ID: 8061
+	u8 wbuf[SLIM_MSGQ_BUF_LEN];
 	bool report_sat = false;
 	bool sync_wr = true;
 
@@ -1398,7 +1398,8 @@ static int ngd_slim_rx_msgq_thread(void *data)
 		int retries = 0;
 		u8 wbuf[8];
 
-		wait_for_completion_interruptible(notify);
+		set_current_state(TASK_INTERRUPTIBLE);
+		wait_for_completion(notify);
 
 		txn.dt = SLIM_MSG_DEST_LOGICALADDR;
 		txn.ec = 0;
@@ -1459,7 +1460,8 @@ static int ngd_notify_slaves(void *data)
 	}
 
 	while (!kthread_should_stop()) {
-		wait_for_completion_interruptible(&dev->qmi.slave_notify);
+		set_current_state(TASK_INTERRUPTIBLE);
+		wait_for_completion(&dev->qmi.slave_notify);
 		/* Probe devices for first notification */
 		if (!i) {
 			i++;

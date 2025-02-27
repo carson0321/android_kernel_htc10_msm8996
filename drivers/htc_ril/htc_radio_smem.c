@@ -28,7 +28,6 @@
 #include <soc/qcom/ramdump.h>
 #include <linux/remote_spinlock.h>
 #include <soc/qcom/subsystem_notif.h>
-#include <soc/qcom/subsystem_restart.h>
 #endif // CONFIG_RAMDUMP_SMLOG
 
 /* set default as normal */
@@ -402,30 +401,6 @@ static int restart_notifier_cb(struct notifier_block *this,
 				unsigned long code,
 				void *data)
 {
-#if defined(CONFIG_HTC_DEBUG_SSR)
-        if ( code == SUBSYS_RAMDUMP_NOTIFICATION ) {
-		struct restart_notifier_block *notifier;
-		struct notif_data *notifdata = data;
-		notifier = container_of(this,
-					struct restart_notifier_block, nb);
-		pr_info("[smlog]%s: ssrestart for processor %d ('%s')\n",
-				__func__, notifier->processor,
-				notifier->name);
-
-		remote_spin_release_all(notifier->processor);
-
-		if (smlog_ramdump_dev && notifdata->enable_ramdump) {
-			int ret;
-
-			pr_info("[smlog]%s: saving smlog ramdump.\n", __func__);
-			ret = do_ramdump(smlog_ramdump_dev,
-					smlog_ramdump_segments, num_smlog_areas);
-			if (ret < 0)
-				pr_err("[smlog]%s: unable to dump smlog %d\n",
-								__func__, ret);
-		}
-	}
-#endif
 	return NOTIFY_DONE;
 }
 

@@ -128,7 +128,6 @@ static int __maybe_unused two = 2;
 static int __maybe_unused four = 4;
 static unsigned long one_ul = 1;
 static int one_hundred = 100;
-static int max_swappiness = 200;
 #ifdef CONFIG_PRINTK
 static int ten_thousand = 10000;
 #endif
@@ -176,7 +175,7 @@ extern int no_unaligned_warning;
 #define SYSCTL_WRITES_WARN	 0
 #define SYSCTL_WRITES_STRICT	 1
 
-static int sysctl_writes_strict = SYSCTL_WRITES_STRICT;
+static int sysctl_writes_strict = SYSCTL_WRITES_WARN;
 
 static int proc_do_cad_pid(struct ctl_table *table, int write,
 		  void __user *buffer, size_t *lenp, loff_t *ppos);
@@ -1531,16 +1530,7 @@ static struct ctl_table vm_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &zero,
-		.extra2		= &max_swappiness,
-	},
-	{
-		.procname	= "inactive_ratio",
-		.data		= &vm_inactive_ratio,
-		.maxlen 	= sizeof(vm_inactive_ratio),
-		.mode		= 0644,
-		.proc_handler	= vm_inactive_ratio_handler,
-		.extra1 	= &one,
-		.extra2 	= &one_hundred,
+		.extra2		= &one_hundred,
 	},
 #ifdef CONFIG_HUGETLB_PAGE
 	{

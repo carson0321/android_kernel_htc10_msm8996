@@ -116,11 +116,6 @@ int set_restart_to_oem(unsigned int code, const char *msg)
 	/* oem-93, 94, 95, 96, 97, 98, 99 are RIL fatal */
 	if ((code >= 0x93) && (code <= 0x98))
 		code = 0x99;
-#ifdef CONFIG_HTC_HANG_DETECT_RESTART
-	/* oem-aa, ab are hanging detector */
-	else if ((code == 0xaa) || (code == 0xab))
-		code = 0x99;
-#endif
 
 	return set_restart_action(RESTART_REASON_OEM_BASE | code, oem_msg);
 }

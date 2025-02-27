@@ -48,7 +48,6 @@
 #include "tfa98xx_parameters.h"
 //HTC_AUD_START
 #include <linux/time.h>
-#define TF98XX_MAX_DSP_CALIBRATION_TRY_COUNT	3
 //HTC_AUD_END
 
 #define TFA98XX_VERSION		"2.10.1-a"
@@ -82,32 +81,18 @@ static LIST_HEAD(profile_list); /* list of user selectable profiles */
 static int tfa98xx_kmsg_regs = 0;
 static int tfa98xx_ftrace_regs = 0;
 
-/* HTC_AUD_START: Klocwork */
-#if 0
 static struct tfa98xx *tfa98xx_devices[4] = {NULL, NULL, NULL, NULL};
-#else
-static struct tfa98xx *tfa98xx_devices[TFACONT_MAXDEVS] = {NULL};
-#endif
-/* HTC_AUD_END */
 static int tfa98xx_registered_handles = 0;
-/* HTC_AUD_START: Klocwork */
-#if 0
 static int tfa98xx_vsteps[4]={0,0,0,0};
-#else
-static int tfa98xx_vsteps[TFACONT_MAXDEVS]={0};
-#endif
-/* HTC_AUD_END */
 static int tfa98xx_profile = 7; /* HTC_AUDIO: bypass profile */ /* store profile */
 static int tfa98xx_prof_vsteps[10] = {0}; /* store vstep per profile (single device) */
 static int tfa98xx_mixer_profiles = 0; /* number of user selectable profiles */
 static int tfa98xx_mixer_profile = 7; /* HTC_AUDIO: bypass profile */ /* current mixer profile */
 
 //HTC_AUD_START
-static struct tfa98xx *tfa98xx_dev = NULL; /* global device */
 static int previews_profile = 7; /* previews profile */
-static int default_vsteps[TFACONT_MAXDEVS] = {0};
+static int default_vsteps[4]={0,0,0,0};
 static bool n1b_chip = false;
-static int htc_calibrate = 0;
 //HTC_AUD_END
 
 static char *dflt_prof_name = "";
@@ -539,10 +524,6 @@ void tfa98xx_deferred_calibration_status(Tfa98xx_handle_t handle, int calibrateD
 							calibrateDone);
 		}
 	}
-//HTC_AUD_START: For check calibration status
-	pr_info("Calibration status: %d\n", calibrateDone);
-	htc_calibrate = calibrateDone;
-//HTC_AUD_END
 }
 
 static ssize_t tfa98xx_dbgfs_start_get(struct file *file,
@@ -1042,7 +1023,7 @@ static int tfa98xx_get_manstate(struct snd_kcontrol *kcontrol,
 #endif
 	struct tfa98xx *tfa98xx = snd_soc_codec_get_drvdata(codec);
 	int manstate = TFA_GET_BF(tfa98xx->handle, MANSTATE);
-	ucontrol->value.integer.value[0] = (htc_calibrate ? manstate:0);
+	ucontrol->value.integer.value[0] = manstate;
 	return 0;
 }
 
@@ -1075,16 +1056,7 @@ static int tfa98xx_get_vstep(struct snd_kcontrol *kcontrol,
 	struct tfa98xx *tfa98xx = snd_soc_codec_get_drvdata(codec);
 	int mixer_profile = kcontrol->private_value;
 	int profile = get_profile_id_for_sr(mixer_profile, tfa98xx->rate);
-/* HTC_AUD_START: Klocwork */
-#if 0
 	int vstep = tfa98xx_prof_vsteps[profile];
-#else
-	int vstep = -1;
-	if (profile < 0)
-		return 0;
-	vstep = tfa98xx_prof_vsteps[profile];
-#endif
-/* HTC_AUD_END */
 	ucontrol->value.integer.value[0] =
 				tfacont_get_max_vstep(0, profile)
 				- vstep - 1;
@@ -1103,25 +1075,13 @@ static int tfa98xx_set_vstep(struct snd_kcontrol *kcontrol,
 	int mixer_profile = kcontrol->private_value;
 	int profile = get_profile_id_for_sr(mixer_profile, tfa98xx->rate);
 	int value = ucontrol->value.integer.value[0];
-/* HTC_AUD_START: Klocwork */
-#if 0
 	int vstep = tfa98xx_prof_vsteps[profile];
-#else
-	int vstep = -1;
-#endif
-/* HTC_AUD_END */
 	int vsteps = tfacont_get_max_vstep(0, profile);
 	int new_vstep, err = 0;
 //HTC_AUD_START: Not using internal clk for profile switching
 //	int ready = 0;
 //	unsigned int base_addr_inten = TFA_FAM(tfa98xx->handle,INTENVDDS) >> 8;
 //HTC_AUD_END
-
-/* HTC_AUD_START: Klocwork */
-	if (profile < 0 || profile >= (sizeof(tfa98xx_prof_vsteps)/sizeof(tfa98xx_prof_vsteps[0])))
-		return 0;
-	vstep = tfa98xx_prof_vsteps[profile];
-/* HTC_AUD_END */
 
 	if (no_start != 0)
 		return 0;
@@ -1358,13 +1318,7 @@ static int get_profile_from_list(char *buf, int id)
 
 	list_for_each_entry(bprof, &profile_list, list) {
 		if (bprof->item_id == id) {
-/* HTC_AUD_START: Klocwork */
-#if 0
 			strcpy(buf, bprof->basename);
-#else
-			strlcpy(buf, bprof->basename, MAX_CONTROL_NAME);
-#endif
-/* HTC_AUD_END */
 			return 0;
 		}
 	}
@@ -1472,13 +1426,7 @@ static int tfa98xx_info_profile(struct snd_kcontrol *kcontrol,
 	if (err != 0)
 		return -EINVAL;
     
-/* HTC_AUD_START: Klocwork */
-#if 0
 	strcpy(uinfo->value.enumerated.name, profile_name);
-#else
-	strlcpy(uinfo->value.enumerated.name, profile_name, sizeof(uinfo->value.enumerated.name));
-#endif
-/* HTC_AUD_END */
  
 	return 0;
 }
@@ -2216,18 +2164,16 @@ static char* fw_name = "Tfa98xx.cnt";
 static nxpTfaContainer_t *container;
 //HTC_AUD_END
 
-static void tfa98xx_loading_work(struct work_struct *work) //HTC_AUD: using request_firmware
+static void tfa98xx_container_loaded(const struct firmware *cont, void *context)
 {
-	const struct firmware *cont = NULL; //HTC_AUD
-	struct tfa98xx *tfa98xx = container_of(work, struct tfa98xx, loading_work.work); //HTC_AUD
+	struct tfa98xx *tfa98xx = context;
 	int container_size;
 	int handle;
 	int ret;
 
 	tfa98xx->dsp_fw_state = TFA98XX_DSP_FW_FAIL;
-	ret = request_firmware(&cont, fw_name, tfa98xx->dev); //HTC_AUD: use requst_firmware
 
-	if (!cont || ret != 0) { //HTC_AUD
+	if (!cont) {
 		pr_err("Failed to read %s\n", fw_name);
 		return;
 	}
@@ -2320,7 +2266,10 @@ static void tfa98xx_loading_work(struct work_struct *work) //HTC_AUD: using requ
 static int tfa98xx_load_container(struct tfa98xx *tfa98xx)
 {
 	tfa98xx->dsp_fw_state = TFA98XX_DSP_FW_PENDING;
-	return queue_delayed_work(tfa98xx->tfa98xx_wq, &tfa98xx->loading_work, 0); //HTC_AUD - use loading queue
+
+	return request_firmware_nowait(THIS_MODULE, FW_ACTION_HOTPLUG,
+	                               fw_name, tfa98xx->dev, GFP_KERNEL,
+	                               tfa98xx, tfa98xx_container_loaded);
 }
 
 
@@ -2448,8 +2397,6 @@ static void tfa98xx_dsp_init(struct tfa98xx *tfa98xx)
 
 //HTC_AUD_START: update profile from mixer path
 	bool from_mixer = false;
-	int left_ohm = 0;
-	int right_ohm = 0;
 	struct timeval begin;
 	struct timeval end;
 	unsigned long diff = 0;
@@ -2554,21 +2501,6 @@ static void tfa98xx_dsp_init(struct tfa98xx *tfa98xx)
 	}
 	if (reschedule) {
 		/* reschedule this init work for later */
-//HTC_AUD_START
-		if(htc_calibrate != 1 && tfa98xx->init_count <= TF98XX_MAX_DSP_CALIBRATION_TRY_COUNT) {
-			if(tfa98xx->init_count < TF98XX_MAX_DSP_CALIBRATION_TRY_COUNT) {
-				tfa_htc_resetMtpEx();
-			} else {
-				tfa_htc_set_imp(LEFT_DEFAULT, RIGHT_DEFAULT);
-				pr_err("Set default ohm due to Calibration fail after 3 tries\n");
-				if(Tfa98xx_Error_Ok == tfa_htc_get_imp(&left_ohm, &right_ohm)) {
-					pr_info("ohm value %d Left, %d Right\n", left_ohm, right_ohm);
-				} else {
-					pr_err("Get ohm failed!\n");
-				}
-			}
-		}
-//HTC_AUD_END
 		queue_delayed_work(tfa98xx->tfa98xx_wq,
 						&tfa98xx->init_work,
 						msecs_to_jiffies(5));
@@ -2579,11 +2511,6 @@ static void tfa98xx_dsp_init(struct tfa98xx *tfa98xx)
 		/* cancel other pending init works */
 		cancel_delayed_work(&tfa98xx->init_work);
 		tfa98xx->init_count = 0;
-
-//HTC_AUD_START
-		pr_err("tfa start fail and set tfa stop\n");
-		tfa_stop(); //HTC_AUD
-//HTC_AUD_END
 	}
 	mutex_unlock(&tfa98xx->dsp_lock);
 	return;
@@ -2934,7 +2861,6 @@ static int tfa98xx_probe(struct snd_soc_codec *codec)
 	INIT_DELAYED_WORK(&tfa98xx->monitor_work, tfa98xx_monitor);
 	INIT_DELAYED_WORK(&tfa98xx->interrupt_work, tfa98xx_interrupt);
 	INIT_DELAYED_WORK(&tfa98xx->tapdet_work, tfa98xx_tapdet_work);
-	INIT_DELAYED_WORK(&tfa98xx->loading_work, tfa98xx_loading_work); //HTC_AUD
 
 	tfa98xx->codec = codec;
 
@@ -2968,7 +2894,6 @@ static int tfa98xx_remove(struct snd_soc_codec *codec)
 	cancel_delayed_work_sync(&tfa98xx->monitor_work);
 	cancel_delayed_work_sync(&tfa98xx->init_work);
 	cancel_delayed_work_sync(&tfa98xx->tapdet_work);
-	cancel_delayed_work_sync(&tfa98xx->loading_work); //HTC_AUD
 
 	if (tfa98xx->tfa98xx_wq)
 		destroy_workqueue(tfa98xx->tfa98xx_wq);
@@ -2977,14 +2902,12 @@ static int tfa98xx_remove(struct snd_soc_codec *codec)
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,16,0)
-
 struct regmap *tfa98xx_get_regmap(struct device *dev)
 {
-	struct tfa98xx *tfa98xx = tfa98xx_dev;//HTC_AUD - use global define due to not register by i2c device
+	struct tfa98xx *tfa98xx = dev_get_drvdata(dev);
 
 	return tfa98xx->regmap;
 }
-
 #endif
 static struct snd_soc_codec_driver soc_codec_dev_tfa98xx = {
 	.probe =	tfa98xx_probe,
@@ -3349,23 +3272,23 @@ static int tfa98xx_i2c_probe(struct i2c_client *i2c,
 			pr_info("Unsupported device revision (0x%x)\n", reg & 0xff);
 			return -EINVAL;
 		}
+	}
 
 //HTC_AUD_START: Select TFA table
-		spk_source = gpio_get_value(tfa98xx->spk_source);
-		n1b_chip = (reg == 0x3b88);
+	spk_source = gpio_get_value(tfa98xx->spk_source);
+	n1b_chip = (reg == 0x3b88);
 
-		if (tfa98xx->spk_source < 0) //non-pme project
-			fw_name = fw_name_default;
-		else if(spk_source && !n1b_chip)
-			fw_name = fw_name_default;
-		else if(!spk_source && !n1b_chip)
-			fw_name = fw_name2;
-		else if(spk_source && n1b_chip)
-			fw_name = fw_name_n1b;
-		else if(!spk_source && n1b_chip)
-			fw_name = fw_name2_n1b;
+	fw_name = fw_name_default;
+
+	if(spk_source && !n1b_chip)
+		fw_name = fw_name_default;
+	else if(!spk_source && !n1b_chip)
+		fw_name = fw_name2;
+	else if(spk_source && n1b_chip)
+		fw_name = fw_name_n1b;
+	else if(!spk_source && n1b_chip)
+		fw_name = fw_name2_n1b;
 //HTC_AUD_END
-	}
 
 
 	/* Modify the stream names, by appending the i2c device address.
@@ -3379,9 +3302,6 @@ static int tfa98xx_i2c_probe(struct i2c_client *i2c,
 		return -ENOMEM;
 	memcpy(dai, tfa98xx_dai, sizeof(tfa98xx_dai));
 
-
-//HTC_AUD_START - register codec as platform device rather than i2c device
-/*
 	tfa98xx_append_i2c_address(&i2c->dev,
 				i2c,
 				NULL,
@@ -3397,8 +3317,6 @@ static int tfa98xx_i2c_probe(struct i2c_client *i2c,
 		dev_err(&i2c->dev, "Failed to register TFA98xx: %d\n", ret);
 		goto err_off;
 	}
-*/
-//HTC_AUD_END
 
 	if (gpio_is_valid(tfa98xx->irq_gpio) &&
 		!(tfa98xx->flags & TFA98XX_FLAG_SKIP_INTERRUPTS)) {
@@ -3430,8 +3348,6 @@ static int tfa98xx_i2c_probe(struct i2c_client *i2c,
 	ret = device_create_bin_file(&i2c->dev, &dev_attr_reg);
 	if (ret)
 		dev_info(&i2c->dev, "error creating sysfs files\n");
-
-	tfa98xx_dev = tfa98xx; //HTC_AUD - Define global for platform device init
 
 	pr_info("%s Probe completed successfully!\n", __func__);
 
@@ -3517,6 +3433,8 @@ static int __init tfa98xx_i2c_init(void)
 
 	return ret;
 }
+module_init(tfa98xx_i2c_init);
+
 
 static void __exit tfa98xx_i2c_exit(void)
 {
@@ -3524,60 +3442,7 @@ static void __exit tfa98xx_i2c_exit(void)
 
 	kfree(container);
 }
-
-//HTC_AUD_START - register as platform device rather than i2c device
-static int tfa_dev_probe(struct platform_device *pdev)
-{
-	if(tfa98xx_dev == NULL)
-		return -EPROBE_DEFER;
-
-	platform_set_drvdata(pdev, tfa98xx_dev);
-	return snd_soc_register_codec(&pdev->dev,
-	&soc_codec_dev_tfa98xx, tfa98xx_dai, ARRAY_SIZE(tfa98xx_dai));
-}
-
-static int tfa_dev_remove(struct platform_device *pdev)
-{
-	snd_soc_unregister_codec(&pdev->dev);
-	return 0;
-}
-
-static struct platform_device *tfa_dev;
-
-static struct platform_driver tfa_htc_driver = {
-	.driver = {
-		.name = "tfa-codec",
-		.owner = THIS_MODULE,
-	},
-	.probe = tfa_dev_probe,
-	.remove = tfa_dev_remove,
-};
-
-static int __init tfa_htc_init(void)
-{
-	int ret;
-	tfa98xx_i2c_init();
-
-	tfa_dev = platform_device_register_simple("tfa-codec", -1, NULL, 0);
-	if (IS_ERR(tfa_dev))
-		return PTR_ERR(tfa_dev);
-
-	ret = platform_driver_register(&tfa_htc_driver);
-	if (ret != 0)
-		platform_device_unregister(tfa_dev);
-
-	return ret;
-}
-module_init(tfa_htc_init);
-
-static void __exit tfa_htc_exit(void)
-{
-	tfa98xx_i2c_exit();
-	platform_device_unregister(tfa_dev);
-	platform_driver_unregister(&tfa_htc_driver);
-}
-module_exit(tfa_htc_exit);
-//HTC_AUD_END
+module_exit(tfa98xx_i2c_exit);
 
 MODULE_DESCRIPTION("ASoC TFA98XX driver");
 MODULE_LICENSE("GPL");

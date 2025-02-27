@@ -36,7 +36,6 @@
 #include <linux/debugfs.h>
 #include <linux/blkdev.h>
 
-#define CREATE_TRACE_POINTS
 #include <trace/events/mmc.h>
 #include <trace/events/mmcio.h>
 
@@ -45,6 +44,7 @@
 #include <linux/mmc/mmc.h>
 #include <linux/mmc/sd.h>
 #include <linux/mmc/slot-gpio.h>
+#include <linux/list_sort.h>
 
 #include "core.h"
 #include "bus.h"
@@ -54,11 +54,6 @@
 #include "mmc_ops.h"
 #include "sd_ops.h"
 #include "sdio_ops.h"
-
-EXPORT_TRACEPOINT_SYMBOL_GPL(mmc_blk_erase_start);
-EXPORT_TRACEPOINT_SYMBOL_GPL(mmc_blk_erase_end);
-EXPORT_TRACEPOINT_SYMBOL_GPL(mmc_blk_rw_start);
-EXPORT_TRACEPOINT_SYMBOL_GPL(mmc_blk_rw_end);
 
 /* If the device is not responding */
 #define MMC_CORE_TIMEOUT_MS	(10 * 60 * 1000) /* 10 minute timeout */
@@ -87,6 +82,136 @@ static const unsigned freqs[] = { 400000, 300000, 200000, 100000 };
  */
 bool use_spi_crc = 1;
 module_param(use_spi_crc, bool, 0);
+
+#define IOTOP_INTERVAL			4500
+#define IOREAD_DUMP_THRESHOLD		10485760 /* 10MB */
+#define IOWRITE_DUMP_THRESHOLD		1048576  /*  1MB */
+#define IOREAD_DUMP_TOTAL_THRESHOLD	10485760 /* 10MB */
+#define IOWRITE_DUMP_TOTAL_THRESHOLD	10485760 /* 10MB */
+struct io_account {
+	char task_name[TASK_COMM_LEN];
+	char gtask_name[TASK_COMM_LEN]; /* group leader */
+	char ptask_name[TASK_COMM_LEN]; /* parnet */
+	unsigned int pid;
+	unsigned int tgid;
+	unsigned int ppid;
+	u64 io_amount;
+	struct list_head list;
+};
+static LIST_HEAD(ioread_list);
+static LIST_HEAD(iowrite_list);
+static spinlock_t iolist_lock;
+static unsigned long jiffies_next_iotop = 0;
+static int iotop_cmp(void *priv, struct list_head *a, struct list_head *b)
+{
+	struct io_account *ioa = container_of(a, struct io_account, list);
+	struct io_account *iob = container_of(b, struct io_account, list);
+
+	return !(ioa->io_amount > iob->io_amount);
+}
+
+void collect_io_stats(size_t rw_bytes, int type)
+{
+	struct task_struct *process = current;
+	struct io_account *io_act, *tmp;
+	int found;
+	struct list_head *io_list;
+	unsigned long flags;
+
+	if (get_tamper_sf() == 1)
+		return;
+
+	if (!rw_bytes)
+		return;
+
+	if (!strcmp(current->comm, "sdcard"))
+		return;
+
+	if (type == READ)
+		io_list = &ioread_list;
+	else if (type == WRITE)
+		io_list = &iowrite_list;
+	else
+		return;
+
+	found = 0;
+	spin_lock_irqsave(&iolist_lock, flags);
+	list_for_each_entry_safe(io_act, tmp, io_list, list) {
+		if ((process->pid == io_act->pid) && !strcmp(process->comm, io_act->task_name)) {
+			io_act->io_amount += rw_bytes;
+			found = 1;
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&iolist_lock, flags);
+
+	if (!found) {
+		io_act = kmalloc(sizeof(struct io_account), GFP_ATOMIC);
+		if (io_act) {
+			snprintf(io_act->task_name, sizeof(io_act->task_name), "%s", process->comm);
+			io_act->pid = process->pid;
+			io_act->tgid = process->tgid;
+			if (process->group_leader)
+				snprintf(io_act->gtask_name, sizeof(io_act->gtask_name), "%s",
+					process->group_leader->comm);
+			if (process->parent) {
+				snprintf(io_act->ptask_name, sizeof(io_act->ptask_name), "%s",
+					process->parent->comm);
+				io_act->ppid = process->parent->pid;
+			}
+			io_act->io_amount = rw_bytes;
+			spin_lock_irqsave(&iolist_lock, flags);
+			list_add(&io_act->list, io_list);
+			spin_unlock_irqrestore(&iolist_lock, flags);
+		}
+	}
+}
+
+static void show_iotop(void)
+{
+	struct io_account *io_act, *tmp;
+	int i = 0;
+	unsigned int task_cnt = 0;
+	unsigned long long total_bytes;
+	unsigned long flags;
+
+	if (get_tamper_sf() == 1)
+		return;
+
+	spin_lock_irqsave(&iolist_lock, flags);
+	list_sort(NULL, &ioread_list, iotop_cmp);
+	total_bytes = 0;
+	list_for_each_entry_safe(io_act, tmp, &ioread_list, list) {
+		list_del_init(&io_act->list);
+		if (i++ < 5 && io_act->io_amount > IOREAD_DUMP_THRESHOLD)
+			pr_info("[READ IOTOP%d] %s(pid %u, tgid %u(%s), ppid %u(%s)): %llu KB\n",
+				i, io_act->task_name, io_act->pid, io_act->tgid, io_act->gtask_name,
+				io_act->ppid, io_act->ptask_name, io_act->io_amount / 1024);
+		task_cnt++;
+		total_bytes += io_act->io_amount;
+		kfree(io_act);
+	}
+	if (total_bytes > IOREAD_DUMP_TOTAL_THRESHOLD)
+		pr_info("[IOTOP] READ total %u tasks, %llu KB\n", task_cnt, total_bytes / 1024);
+
+	list_sort(NULL, &iowrite_list, iotop_cmp);
+	i = 0;
+	total_bytes = 0;
+	task_cnt = 0;
+	list_for_each_entry_safe(io_act, tmp, &iowrite_list, list) {
+		list_del_init(&io_act->list);
+		if (i++ < 5 && io_act->io_amount >= IOWRITE_DUMP_THRESHOLD)
+			pr_info("[WRITE IOTOP%d] %s(pid %u, tgid %u(%s), ppid %u(%s)): %llu KB\n",
+				i, io_act->task_name, io_act->pid, io_act->tgid, io_act->gtask_name,
+				io_act->ppid, io_act->ptask_name, io_act->io_amount / 1024);
+		task_cnt++;
+		total_bytes += io_act->io_amount;
+		kfree(io_act);
+	}
+	spin_unlock_irqrestore(&iolist_lock, flags);
+	if (total_bytes > IOWRITE_DUMP_TOTAL_THRESHOLD)
+		pr_info("[IOTOP] WRITE total %u tasks, %llu KB\n", task_cnt, total_bytes / 1024);
+}
 
 static int stats_interval = MMC_STATS_INTERVAL;
 #define K(x) ((x) << (PAGE_SHIFT - 10))
@@ -257,6 +382,11 @@ void mmc_stats(struct work_struct *work)
 	if (erase_time > 500)
 		pr_info("%s Statistics: erase %lu blocks in %lu ms, rq %lu\n",
 			mmc_hostname(host), erase_blks, erase_time, erase_rq);
+
+	if (!jiffies_next_iotop || time_after(jiffies, jiffies_next_iotop)) {
+		jiffies_next_iotop = jiffies + msecs_to_jiffies(IOTOP_INTERVAL);
+		show_iotop();
+	}
 
 	/* random rw */
 	if (host->debug_mask & MMC_DEBUG_RANDOM_RW) {
@@ -622,11 +752,6 @@ int mmc_clk_update_freq(struct mmc_host *host,
 		return -EINVAL;
 	}
 
-	if (!host->card) {
-		pr_err("%s card is null error\n", mmc_hostname(host));
-		return -ENODEV;
-	}
-
 	mmc_host_clk_hold(host);
 	cmdq_mode = mmc_card_cmdq(host->card);
 
@@ -708,10 +833,6 @@ static int mmc_devfreq_set_target(struct device *dev,
 	struct mmc_devfeq_clk_scaling *clk_scaling;
 	int err = 0;
 	int abort;
-	unsigned long pflags = current->flags;
-
-	/* Ensure scaling would happen even in memory pressure conditions */
-	current->flags |= PF_MEMALLOC;
 
 	if (!(host && freq)) {
 		pr_err("%s: unexpected host/freq parameter\n", __func__);
@@ -770,7 +891,6 @@ static int mmc_devfreq_set_target(struct device *dev,
 	mmc_host_clk_release(host);
 	mmc_release_host(host);
 out:
-	tsk_restore_flags(current, pflags, PF_MEMALLOC);
 	return err;
 }
 
@@ -1032,15 +1152,10 @@ int mmc_resume_clk_scaling(struct mmc_host *host)
 	if (!mmc_can_scale_clk(host))
 		return 0;
 
-	/*
-	 * If clock scaling is already exited when resume is called, like
-	 * during mmc shutdown, it is not an error and should not fail the
-	 * API calling this.
-	 */
 	if (!host->clk_scaling.devfreq) {
-		pr_warn("%s: %s: no devfreq is assosiated with this device\n",
+		pr_err("%s: %s: no devfreq is assosiated with this device\n",
 			mmc_hostname(host), __func__);
-		return 0;
+		return -EPERM;
 	}
 
 	atomic_set(&host->clk_scaling.devfreq_abort, 0);
@@ -1224,21 +1339,6 @@ void mmc_request_done(struct mmc_host *host, struct mmc_request *mrq)
 
 EXPORT_SYMBOL(mmc_request_done);
 
-static void __mmc_start_request(struct mmc_host *host, struct mmc_request *mrq)
-{
-	int err;
-
-	/* Assumes host controller has been runtime resumed by mmc_claim_host */
-	err = mmc_retune(host);
-	if (err) {
-		mrq->cmd->error = err;
-		mmc_request_done(host, mrq);
-		return;
-	}
-
-	host->ops->request(host, mrq);
-}
-
 static void
 mmc_start_request(struct mmc_host *host, struct mmc_request *mrq)
 {
@@ -1246,7 +1346,6 @@ mmc_start_request(struct mmc_host *host, struct mmc_request *mrq)
 	unsigned int i, sz;
 	struct scatterlist *sg;
 #endif
-	mmc_retune_hold(host);
 
 	if (mrq->sbc) {
 		pr_debug("<%s: starting CMD%u arg %08x flags %08x>\n",
@@ -1315,7 +1414,7 @@ mmc_start_request(struct mmc_host *host, struct mmc_request *mrq)
 		mmc_clk_scaling_start_busy(host, true);
 	}
 
-	__mmc_start_request(host, mrq);
+	host->ops->request(host, mrq);
 }
 
 static void mmc_start_cmdq_request(struct mmc_host *host,
@@ -1636,22 +1735,22 @@ static int mmc_wait_for_data_req_done(struct mmc_host *host,
 							    host->areq);
 				break; /* return err */
 			} else {
-				mmc_retune_recheck(host);
 				pr_info("%s: req failed (CMD%u): %d, retrying...\n",
 					mmc_hostname(host),
 					cmd->opcode, cmd->error);
 				cmd->retries--;
 				cmd->error = 0;
-				__mmc_start_request(host, mrq);
+				host->ops->request(host, mrq);
 				continue; /* wait for done/new event again */
 			}
 		} else if (context_info->is_new_req) {
 			context_info->is_new_req = false;
-			if (!next_req)
-				return MMC_BLK_NEW_REQUEST;
+			if (!next_req) {
+				err = MMC_BLK_NEW_REQUEST;
+				break; /* return err */
+			}
 		}
 	}
-	mmc_retune_release(host);
 	return err;
 }
 
@@ -1702,16 +1801,12 @@ static void mmc_wait_for_req_done(struct mmc_host *host,
 		    mmc_card_removed(host->card))
 			break;
 
-		mmc_retune_recheck(host);
-
 		pr_debug("%s: req failed (CMD%u): %d, retrying...\n",
 			 mmc_hostname(host), cmd->opcode, cmd->error);
 		cmd->retries--;
 		cmd->error = 0;
-		__mmc_start_request(host, mrq);
+		host->ops->request(host, mrq);
 	}
-
-	mmc_retune_release(host);
 }
 
 /**
@@ -1902,6 +1997,7 @@ struct mmc_async_req *mmc_start_req(struct mmc_host *host,
 				    struct mmc_async_req *areq, int *error)
 {
 	int err = 0;
+	int start_err = 0;
 	struct mmc_async_req *data = host->areq;
 
 	/* Prepare a new request */
@@ -1933,7 +2029,7 @@ struct mmc_async_req *mmc_start_req(struct mmc_host *host,
 		trace_mmc_blk_rw_start(areq->mrq->cmd->opcode,
 				       areq->mrq->cmd->arg,
 				       areq->mrq->data);
-		__mmc_start_data_req(host, areq->mrq);
+		start_err = __mmc_start_data_req(host, areq->mrq);
 	}
 
 	if (host->areq)
@@ -2324,38 +2420,6 @@ int __mmc_claim_host(struct mmc_host *host, atomic_t *abort)
 EXPORT_SYMBOL(__mmc_claim_host);
 
 /**
- *     mmc_try_claim_host - try exclusively to claim a host
- *        and keep trying for given time, with a gap of 10ms
- *     @host: mmc host to claim
- *     @dealy_ms: delay in ms
- *
- *     Returns %1 if the host is claimed, %0 otherwise.
- */
-int mmc_try_claim_host(struct mmc_host *host, unsigned int delay_ms)
-{
-	int claimed_host = 0;
-	unsigned long flags;
-	int retry_cnt = delay_ms/10;
-
-	do {
-		spin_lock_irqsave(&host->lock, flags);
-		if (!host->claimed || host->claimer == current) {
-			host->claimed = 1;
-			host->claimer = current;
-			host->claim_cnt += 1;
-			claimed_host = 1;
-		}
-		spin_unlock_irqrestore(&host->lock, flags);
-		if (!claimed_host)
-			mmc_delay(10);
-	} while (!claimed_host && retry_cnt--);
-	if (host->ops->enable && claimed_host && host->claim_cnt == 1)
-		host->ops->enable(host);
-	return claimed_host;
-}
-EXPORT_SYMBOL(mmc_try_claim_host);
-
-/**
  *	mmc_release_host - release a host
  *	@host: mmc host to release
  *
@@ -2513,14 +2577,6 @@ void mmc_ungate_clock(struct mmc_host *host)
 		WARN_ON(host->ios.clock);
 		/* This call will also set host->clk_gated to false */
 		__mmc_set_clock(host, host->clk_old);
-		/*
-		 * We have seen that host controller's clock tuning circuit may
-		 * go out of sync if controller clocks are gated.
-		 * To workaround this issue, we are triggering retuning of the
-		 * tuning circuit after ungating the controller clocks.
-		 */
-		if (host->sdr104_wa)
-			mmc_retune_needed(host);
 	}
 }
 
@@ -2542,32 +2598,6 @@ void mmc_set_ungated(struct mmc_host *host)
 {
 }
 #endif
-
-int mmc_execute_tuning(struct mmc_card *card)
-{
-	struct mmc_host *host = card->host;
-	u32 opcode;
-	int err;
-
-	if (!host->ops->execute_tuning)
-		return 0;
-
-	if (mmc_card_mmc(card))
-		opcode = MMC_SEND_TUNING_BLOCK_HS200;
-	else
-		opcode = MMC_SEND_TUNING_BLOCK;
-
-	mmc_host_clk_hold(host);
-	err = host->ops->execute_tuning(host, opcode);
-	mmc_host_clk_release(host);
-
-	if (err)
-		pr_err("%s: tuning execution failed\n", mmc_hostname(host));
-	else
-		mmc_retune_enable(host);
-
-	return err;
-}
 
 /*
  * Change the bus mode (open drain/push-pull) of a host.
@@ -2707,34 +2737,6 @@ int mmc_of_parse_voltage(struct device_node *np, u32 *mask)
 EXPORT_SYMBOL(mmc_of_parse_voltage);
 
 #endif /* CONFIG_OF */
-
-static int mmc_of_get_func_num(struct device_node *node)
-{
-	u32 reg;
-	int ret;
-
-	ret = of_property_read_u32(node, "reg", &reg);
-	if (ret < 0)
-		return ret;
-
-	return reg;
-}
-
-struct device_node *mmc_of_find_child_device(struct mmc_host *host,
-		unsigned func_num)
-{
-	struct device_node *node;
-
-	if (!host->parent || !host->parent->of_node)
-		return NULL;
-
-	for_each_child_of_node(host->parent->of_node, node) {
-		if (mmc_of_get_func_num(node) == func_num)
-			return node;
-	}
-
-	return NULL;
-}
 
 #ifdef CONFIG_REGULATOR
 
@@ -3067,7 +3069,6 @@ void mmc_power_up(struct mmc_host *host, u32 ocr)
 		return;
 
 	mmc_host_clk_hold(host);
-	mmc_retune_disable(host);
 
 	host->ios.vdd = fls(ocr) - 1;
 	if (mmc_host_is_spi(host))
@@ -3115,7 +3116,6 @@ void mmc_power_off(struct mmc_host *host)
 		return;
 
 	mmc_host_clk_hold(host);
-	mmc_retune_disable(host);
 
 	host->ios.clock = 0;
 	host->ios.vdd = 0;
@@ -3194,7 +3194,7 @@ int mmc_resume_bus(struct mmc_host *host)
 	if (!mmc_bus_needs_resume(host))
 		return -EINVAL;
 
-	pr_info("%s: Starting deferred resume\n", mmc_hostname(host));
+	pr_debug("%s: Starting deferred resume\n", mmc_hostname(host));
 	spin_lock_irqsave(&host->lock, flags);
 	host->bus_resume_flags &= ~MMC_BUSRESUME_NEEDS_RESUME;
 	spin_unlock_irqrestore(&host->lock, flags);
@@ -3215,7 +3215,7 @@ int mmc_resume_bus(struct mmc_host *host)
 	}
 
 	mmc_bus_put(host);
-	pr_info("%s: Deferred resume completed\n", mmc_hostname(host));
+	pr_debug("%s: Deferred resume completed\n", mmc_hostname(host));
 	return 0;
 }
 EXPORT_SYMBOL(mmc_resume_bus);
@@ -4022,7 +4022,6 @@ static int mmc_do_hw_reset(struct mmc_host *host, int check)
 		return -EOPNOTSUPP;
 
 	mmc_host_clk_hold(host);
-	mmc_retune_disable(host);
 	mmc_set_clock(host, host->f_init);
 
 	if (mmc_card_mmc(card) && host->ops->hw_reset)
@@ -4204,10 +4203,9 @@ void mmc_rescan(struct work_struct *work)
 	struct mmc_host *host =
 		container_of(work, struct mmc_host, detect.work);
 
-	if (mmc_is_sd_host(host))
-		pr_info("%s: %s rescan_disable %d nonremovable %d rescan_entered %d\n",
-			mmc_hostname(host), __func__, host->rescan_disable,
-			(host->caps & MMC_CAP_NONREMOVABLE) ? 1 : 0, host->rescan_entered);
+	pr_info("%s: %s rescan_disable %d nonremovable %d rescan_entered %d\n",
+		mmc_hostname(host), __func__, host->rescan_disable,
+		(host->caps & MMC_CAP_NONREMOVABLE) ? 1 : 0, host->rescan_entered);
 
 	if (host->card && host->card->force_remove) {
 		pr_info("%s: %s remove card (removed_cnt = %d)\n", mmc_hostname(host),
@@ -4663,7 +4661,6 @@ int mmc_simple_transfer(struct mmc_card *card,
 }
 EXPORT_SYMBOL(mmc_simple_transfer);
 
-
 /**
  * mmc_init_context_info() - init synchronization context
  * @host: mmc host
@@ -4724,6 +4721,7 @@ static int __init mmc_init(void)
 	if (ret)
 		goto unregister_host_class;
 
+	spin_lock_init(&iolist_lock);
 	return 0;
 
 unregister_host_class:

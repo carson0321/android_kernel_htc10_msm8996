@@ -788,6 +788,7 @@ static bool free_pages_prepare(struct page *page, unsigned int order)
 
 	trace_mm_page_free(page, order);
 	kmemcheck_free_shadow(page, order);
+	kasan_free_pages(page, order);
 
 	if (PageAnon(page))
 		page->mapping = NULL;
@@ -852,7 +853,6 @@ bool is_cma_pageblock(struct page *page)
 {
 	return get_pageblock_migratetype(page) == MIGRATE_CMA;
 }
-EXPORT_SYMBOL(is_cma_pageblock);
 
 /* Free whole pageblock and set its migration type to MIGRATE_CMA. */
 void __init init_cma_reserved_pageblock(struct page *page)
@@ -978,6 +978,7 @@ static int prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags)
 	kasan_alloc_pages(page, order);
 	arch_alloc_page(page, order);
 	kernel_map_pages(page, 1 << order, 1);
+	kasan_alloc_pages(page, order);
 
 	if (gfp_flags & __GFP_ZERO)
 		prep_zero_page(page, order, gfp_flags);
@@ -1080,13 +1081,13 @@ int move_freepages(struct zone *zone,
 #endif
 
 	for (page = start_page; page <= end_page;) {
+		/* Make sure we are not inadvertently changing nodes */
+		VM_BUG_ON_PAGE(page_to_nid(page) != zone_to_nid(zone), page);
+
 		if (!pfn_valid_within(page_to_pfn(page))) {
 			page++;
 			continue;
 		}
-
-		/* Make sure we are not inadvertently changing nodes */
-		VM_BUG_ON_PAGE(page_to_nid(page) != zone_to_nid(zone), page);
 
 		if (!PageBuddy(page)) {
 			page++;
@@ -1153,12 +1154,8 @@ static void change_pageblock_range(struct page *pageblock_page,
  * as fragmentation caused by those allocations polluting movable pageblocks
  * is worse than movable allocations stealing from unmovable and reclaimable
  * pageblocks.
- *
- * If we claim more than half of the pageblock, change pageblock's migratetype
- * as well.
  */
-static bool can_steal_fallback(unsigned int current_order, unsigned int start_order,
-			       int start_mt, int fallback_mt)
+static bool can_steal_fallback(unsigned int order, int start_mt)
 {
 	/*
 	 * Leaving this order check is intended, although there is
@@ -1167,17 +1164,12 @@ static bool can_steal_fallback(unsigned int current_order, unsigned int start_or
 	 * but, below check doesn't guarantee it and that is just heuristic
 	 * so could be changed anytime.
 	 */
-	if (current_order >= pageblock_order)
+	if (order >= pageblock_order)
 		return true;
 
-	/* don't let unmovable allocations cause migrations simply because of free pages */
-	if ((start_mt != MIGRATE_UNMOVABLE && current_order >= pageblock_order / 2) ||
-	        /* only steal reclaimable page blocks for unmovable allocations */
-	        (start_mt == MIGRATE_UNMOVABLE && fallback_mt != MIGRATE_MOVABLE && current_order >= pageblock_order / 2) ||
-	        /* reclaimable can steal aggressively */
+	if (order >= pageblock_order / 2 ||
 		start_mt == MIGRATE_RECLAIMABLE ||
-		/* allow unmovable allocs up to 64K without migrating blocks */
-		(start_mt == MIGRATE_UNMOVABLE && start_order >= 5) ||
+		start_mt == MIGRATE_UNMOVABLE ||
 		page_group_by_mobility_disabled)
 		return true;
 
@@ -1212,8 +1204,8 @@ static void steal_suitable_fallback(struct zone *zone, struct page *page,
 }
 
 /* Check whether there is a suitable fallback freepage with requested order. */
-static int find_suitable_fallback(struct free_area *area, unsigned int current_order,
-				  int migratetype, int start_order, bool *can_steal)
+static int find_suitable_fallback(struct free_area *area, unsigned int order,
+					int migratetype, bool *can_steal)
 {
 	int i;
 	int fallback_mt;
@@ -1230,7 +1222,7 @@ static int find_suitable_fallback(struct free_area *area, unsigned int current_o
 		if (list_empty(&area->free_list[fallback_mt]))
 			continue;
 
-		if (can_steal_fallback(current_order, start_order, migratetype, fallback_mt))
+		if (can_steal_fallback(order, migratetype))
 			*can_steal = true;
 
 		return fallback_mt;
@@ -1241,18 +1233,23 @@ static int find_suitable_fallback(struct free_area *area, unsigned int current_o
 
 /* Remove an element from the buddy allocator from the fallback list */
 static inline struct page *
-__rmqueue_fallback_order(struct zone *zone, unsigned int order, int start_migratetype, unsigned int current_order)
+__rmqueue_fallback(struct zone *zone, unsigned int order, int start_migratetype)
 {
 	struct free_area *area;
+	unsigned int current_order;
 	struct page *page;
 	int fallback_mt;
 	bool can_steal;
 
+	/* Find the largest possible block of pages in the other list */
+	for (current_order = MAX_ORDER-1;
+				current_order >= order && current_order <= MAX_ORDER-1;
+				--current_order) {
 		area = &(zone->free_area[current_order]);
 		fallback_mt = find_suitable_fallback(area, current_order,
-			start_migratetype, order, &can_steal);
+				start_migratetype, &can_steal);
 		if (fallback_mt == -1)
-			return NULL;
+			continue;
 
 		page = list_entry(area->free_list[fallback_mt].next,
 						struct page, lru);
@@ -1283,30 +1280,9 @@ __rmqueue_fallback_order(struct zone *zone, unsigned int order, int start_migrat
 			start_migratetype, fallback_mt);
 
 		return page;
-}
+	}
 
-/* Remove an element from the buddy allocator from the fallback list */
-static inline struct page *
-__rmqueue_fallback(struct zone *zone, unsigned int order, int start_migratetype)
-{
-        unsigned int current_order;
-        struct page *page;
-
-        /* Find the largest possible block of pages in the other list */
-        for (current_order = MAX_ORDER-1; current_order >= max((unsigned int)(PAGE_ALLOC_COSTLY_ORDER+1), order); --current_order) {
-                page = __rmqueue_fallback_order(zone, order, start_migratetype, current_order);
-                if (page)
-                        return page;
-        }
-
-        /* While current_order <= PAGE_ALLOC_COSTLY_ORDER, find the smallest pages in the other list to avoid fragmentation*/
-        for (current_order = order; current_order <= PAGE_ALLOC_COSTLY_ORDER; ++current_order) {
-                page = __rmqueue_fallback_order(zone, order, start_migratetype, current_order);
-                if (page)
-                        return page;
-        }
-
-        return NULL;
+	return NULL;
 }
 
 /*
@@ -2516,13 +2492,10 @@ __alloc_pages_direct_compact(gfp_t gfp_mask, unsigned int order,
 	struct zone *last_compact_zone = NULL;
 	unsigned long compact_result;
 	struct page *page;
-	unsigned long start_jiffies;
-	unsigned int msecs_age;
 
 	if (!order)
 		return NULL;
 
-	start_jiffies = jiffies;
 	current->flags |= PF_MEMALLOC;
 	compact_result = try_to_compact_pages(zonelist, order, gfp_mask,
 						nodemask, mode,
@@ -2546,26 +2519,6 @@ __alloc_pages_direct_compact(gfp_t gfp_mask, unsigned int order,
 	 * count a compaction stall
 	 */
 	count_vm_event(COMPACTSTALL);
-
-	msecs_age = jiffies_to_msecs(jiffies - start_jiffies);
-	if (order > PAGE_ALLOC_COSTLY_ORDER)
-		count_vm_event(COMPACTSTALL_HORDER);
-
-	if (msecs_age >= FOREGROUND_RECLAIM_1000MS)
-		count_vm_event(COMPACTSTALL_1000);
-	else if (msecs_age >= FOREGROUND_RECLAIM_500MS)
-		count_vm_event(COMPACTSTALL_500);
-	else if (msecs_age >= FOREGROUND_RECLAIM_250MS)
-		count_vm_event(COMPACTSTALL_250);
-	else if (msecs_age >= FOREGROUND_RECLAIM_100MS)
-		count_vm_event(COMPACTSTALL_100);
-
-	if (msecs_age >= FOREGROUND_RECLAIM_500MS || order > PAGE_ALLOC_COSTLY_ORDER) {
-		pr_warn("%s(%d:%d): direct compact alloc order:%d gfp:0x%x mode %d, spend %d.%03ds\n",
-			current->comm, current->tgid, current->pid,
-			order, gfp_mask, mode, msecs_age / 1000, msecs_age % 1000);
-		dump_stack();
-	}
 
 	/* Page migration frees to the PCP lists but we want merging */
 	drain_pages(get_cpu());
@@ -5587,18 +5540,15 @@ void __init free_area_init_nodes(unsigned long *max_zone_pfn)
 				sizeof(arch_zone_lowest_possible_pfn));
 	memset(arch_zone_highest_possible_pfn, 0,
 				sizeof(arch_zone_highest_possible_pfn));
-
-	start_pfn = find_min_pfn_with_active_regions();
-
-	for (i = 0; i < MAX_NR_ZONES; i++) {
+	arch_zone_lowest_possible_pfn[0] = find_min_pfn_with_active_regions();
+	arch_zone_highest_possible_pfn[0] = max_zone_pfn[0];
+	for (i = 1; i < MAX_NR_ZONES; i++) {
 		if (i == ZONE_MOVABLE)
 			continue;
-
-		end_pfn = max(max_zone_pfn[i], start_pfn);
-		arch_zone_lowest_possible_pfn[i] = start_pfn;
-		arch_zone_highest_possible_pfn[i] = end_pfn;
-
-		start_pfn = end_pfn;
+		arch_zone_lowest_possible_pfn[i] =
+			arch_zone_highest_possible_pfn[i-1];
+		arch_zone_highest_possible_pfn[i] =
+			max(max_zone_pfn[i], arch_zone_lowest_possible_pfn[i]);
 	}
 	arch_zone_lowest_possible_pfn[ZONE_MOVABLE] = 0;
 	arch_zone_highest_possible_pfn[ZONE_MOVABLE] = 0;
@@ -5717,8 +5667,8 @@ unsigned long free_reserved_area(void *start, void *end, int poison, char *s)
 	}
 
 	if (pages && s)
-		pr_info("Freeing %s memory: %ldK\n",
-			s, pages << (PAGE_SHIFT - 10));
+		pr_info("Freeing %s memory: %ldK (%p - %p)\n",
+			s, pages << (PAGE_SHIFT - 10), start, end);
 
 	return pages;
 }
@@ -6045,22 +5995,6 @@ static void __meminit setup_per_zone_inactive_ratio(void)
 		calculate_zone_inactive_ratio(zone);
 }
 
-int vm_inactive_ratio = 0;
-int vm_inactive_ratio_handler(struct ctl_table *table, int write,
-	void __user *buffer, size_t *length, loff_t *ppos)
-{
-	struct zone *zone;
-	int old_ratio = vm_inactive_ratio;
-	int ret;
-
-	ret = proc_dointvec_minmax(table, write, buffer, length, ppos);
-	if (ret == 0 && write && vm_inactive_ratio != old_ratio) {
-		for_each_zone(zone){
-			zone->inactive_ratio = vm_inactive_ratio;
-		}
-	}
-	return ret;
-}
 /*
  * Initialise min_free_kbytes.
  *
@@ -6698,7 +6632,7 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 
 	/* Make sure the range is really isolated. */
 	if (test_pages_isolated(outer_start, end, false)) {
-		pr_info_ratelimited("%s: [%lx, %lx) PFNs busy\n",
+		pr_info("%s: [%lx, %lx) PFNs busy\n",
 			__func__, outer_start, end);
 		ret = -EBUSY;
 		goto done;

@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -753,7 +753,7 @@ inc_loop:
 			list_del(&mport->list);
 			kfree(mport);
 		}
-		if (!mport_next || (&mport_next->list == &swrm->mport_list)) {
+		if (!mport_next) {
 			dev_err(swrm->dev, "%s: end of list\n", __func__);
 			break;
 		}
@@ -1243,7 +1243,7 @@ static int swrm_get_logical_dev_num(struct swr_master *mstr, u64 dev_id,
 				u8 *dev_num)
 {
 	int i;
-	u64 id = 0; //HTC_AUD klockwork
+	u64 id;
 	int ret = -EINVAL;
 	struct swr_mstr_ctrl *swrm = swr_get_ctrl_data(mstr);
 

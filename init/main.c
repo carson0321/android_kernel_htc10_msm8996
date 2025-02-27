@@ -89,15 +89,14 @@
 #include <asm/smp.h>
 #endif
 
-#ifdef CONFIG_HTC_EARLY_RTB
-#include <linux/msm_rtb.h>
-#endif
-
 static int kernel_init(void *);
 
 extern void init_IRQ(void);
 extern void fork_init(unsigned long);
 extern void radix_tree_init(void);
+#ifndef CONFIG_DEBUG_RODATA
+static inline void mark_rodata_ro(void) { }
+#endif
 
 /*
  * Debug helper: via this flag we know that we are in 'early bootup code'
@@ -125,7 +124,6 @@ void (*__initdata late_time_init)(void);
 char __initdata boot_command_line[COMMAND_LINE_SIZE];
 /* Untouched saved command line (eg. for /proc) */
 char *saved_command_line;
-char *hashed_command_line;
 /* Command line for parameter parsing */
 static char *static_command_line;
 /* Command line for per-initcall parameter parsing */
@@ -238,8 +236,7 @@ static int __init loglevel(char *str)
 early_param("loglevel", loglevel);
 
 /* Change NUL term back to "=", to make "param" the whole string. */
-static int __init repair_env_string(char *param, char *val,
-				    const char *unused, void *arg)
+static int __init repair_env_string(char *param, char *val, const char *unused)
 {
 	if (val) {
 		/* param=val or param="val"? */
@@ -256,15 +253,14 @@ static int __init repair_env_string(char *param, char *val,
 }
 
 /* Anything after -- gets handed straight to init. */
-static int __init set_init_arg(char *param, char *val,
-			       const char *unused, void *arg)
+static int __init set_init_arg(char *param, char *val, const char *unused)
 {
 	unsigned int i;
 
 	if (panic_later)
 		return 0;
 
-	repair_env_string(param, val, unused, NULL);
+	repair_env_string(param, val, unused);
 
 	for (i = 0; argv_init[i]; i++) {
 		if (i == MAX_INIT_ARGS) {
@@ -281,10 +277,9 @@ static int __init set_init_arg(char *param, char *val,
  * Unknown boot options get handed to init, unless they look like
  * unused parameters (modprobe will find them in /proc/cmdline).
  */
-static int __init unknown_bootoption(char *param, char *val,
-				     const char *unused, void *arg)
+static int __init unknown_bootoption(char *param, char *val, const char *unused)
 {
-	repair_env_string(param, val, unused, NULL);
+	repair_env_string(param, val, unused);
 
 	/* Handle obsolete-style parameters */
 	if (obsolete_checksetup(param))
@@ -384,35 +379,6 @@ static void __init setup_command_line(char *command_line)
 	strcpy(static_command_line, command_line);
 }
 
-#define RAW_SN_LEN 4
-static void __init hash_sn(void)
-{
-	char *p;
-	size_t cmdline_len;
-	unsigned int i;
-	size_t sn_len = 0;
-
-	cmdline_len = strlen(saved_command_line);
-
-	hashed_command_line = alloc_bootmem(cmdline_len + 1);
-	strncpy(hashed_command_line, saved_command_line, cmdline_len);
-	hashed_command_line[cmdline_len] = '\0';
-
-	for (p = hashed_command_line; p < hashed_command_line + cmdline_len - strlen("androidboot.serialno="); p++) {
-	    if (!strncmp(p, "androidboot.serialno=", strlen("androidboot.serialno="))) {
-		p += strlen("androidboot.serialno=");
-		while (*p != ' '  && *p != '\0') {
-		    sn_len++;
-		    p++;
-		}
-		p -= sn_len;
-		for (i = sn_len - 1; i >= RAW_SN_LEN; i--)
-		    *p++ = '*';
-		break;
-	    }
-	}
-}
-
 /*
  * We need to finalize in a non-__init function or else race conditions
  * between the root thread and the init thread may cause start_kernel to
@@ -454,8 +420,7 @@ static noinline void __init_refok rest_init(void)
 }
 
 /* Check for early params. */
-static int __init do_early_param(char *param, char *val,
-				 const char *unused, void *arg)
+static int __init do_early_param(char *param, char *val, const char *unused)
 {
 	const struct obs_kernel_param *p;
 
@@ -474,8 +439,7 @@ static int __init do_early_param(char *param, char *val,
 
 void __init parse_early_options(char *cmdline)
 {
-	parse_args("early options", cmdline, NULL, 0, 0, 0, NULL,
-		   do_early_param);
+	parse_args("early options", cmdline, NULL, 0, 0, 0, do_early_param);
 }
 
 /* Arch code calls this early on, or if not, just before other parsing. */
@@ -567,7 +531,6 @@ asmlinkage __visible void __init start_kernel(void)
 	boot_init_stack_canary();
 	mm_init_cpumask(&init_mm);
 	setup_command_line(command_line);
-        hash_sn();
 	setup_nr_cpu_ids();
 	setup_per_cpu_areas();
 	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks */
@@ -575,15 +538,15 @@ asmlinkage __visible void __init start_kernel(void)
 	build_all_zonelists(NULL, NULL);
 	page_alloc_init();
 
-	pr_notice("Kernel command line: %s\n", hashed_command_line);
+	pr_notice("Kernel command line: %s\n", boot_command_line);
 	parse_early_param();
 	after_dashes = parse_args("Booting kernel",
 				  static_command_line, __start___param,
 				  __stop___param - __start___param,
-				  -1, -1, NULL, &unknown_bootoption);
+				  -1, -1, &unknown_bootoption);
 	if (!IS_ERR_OR_NULL(after_dashes))
 		parse_args("Setting init args", after_dashes, NULL, 0, -1, -1,
-			   NULL, set_init_arg);
+			   set_init_arg);
 
 	jump_label_init();
 
@@ -614,10 +577,6 @@ asmlinkage __visible void __init start_kernel(void)
 		local_irq_disable();
 	idr_init_cache();
 	rcu_init();
-
-	/* trace_printk() and trace points may be used after this */
-	trace_init();
-
 	context_tracking_init();
 	radix_tree_init();
 	/* init some links before init_ISA_irqs() */
@@ -827,16 +786,10 @@ int __init_or_module do_one_initcall(initcall_t fn)
 	if (initcall_blacklisted(fn))
 		return -EPERM;
 
-#ifdef CONFIG_HTC_EARLY_RTB
-	uncached_logk_pc(LOGK_INITCALL, (void *)fn, (void *)(0x00000000));
-#endif
 	if (initcall_debug)
 		ret = do_one_initcall_debug(fn);
 	else
 		ret = fn();
-#ifdef CONFIG_HTC_EARLY_RTB
-	uncached_logk_pc(LOGK_INITCALL, (void *)fn, (void *)(0xffffffff));
-#endif
 
 	msgbuf[0] = 0;
 
@@ -898,7 +851,7 @@ static void __init do_initcall_level(int level)
 		   initcall_command_line, __start___param,
 		   __stop___param - __start___param,
 		   level, level,
-		   NULL, &repair_env_string);
+		   &repair_env_string);
 
 	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++)
 		do_one_initcall(*fn);
@@ -975,28 +928,6 @@ static int try_to_run_init_process(const char *init_filename)
 
 static noinline void __init kernel_init_freeable(void);
 
-#ifdef CONFIG_DEBUG_RODATA
-static bool rodata_enabled = true;
-static int __init set_debug_rodata(char *str)
-{
-	return strtobool(str, &rodata_enabled);
-}
-__setup("rodata=", set_debug_rodata);
-
-static void mark_readonly(void)
-{
-	if (rodata_enabled)
-		mark_rodata_ro();
-	else
-		pr_info("Kernel memory protection disabled.\n");
-}
-#else
-static inline void mark_readonly(void)
-{
-	pr_warn("This architecture does not have kernel memory protection.\n");
-}
-#endif
-
 static int __ref kernel_init(void *unused)
 {
 	int ret;
@@ -1005,7 +936,7 @@ static int __ref kernel_init(void *unused)
 	/* need to finish all async __init code before freeing the memory */
 	async_synchronize_full();
 	free_initmem();
-	mark_readonly();
+	mark_rodata_ro();
 	system_state = SYSTEM_RUNNING;
 	numa_default_policy();
 
@@ -1069,9 +1000,6 @@ static noinline void __init kernel_init_freeable(void)
 	lockup_detector_init();
 
 	smp_init();
-#ifdef CONFIG_HTC_EARLY_RTB
-	htc_early_rtb_init();
-#endif
 	sched_init_smp();
 
 	do_basic_setup();

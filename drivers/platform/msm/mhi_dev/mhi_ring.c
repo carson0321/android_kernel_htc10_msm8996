@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -47,36 +47,35 @@ int mhi_dev_fetch_ring_elements(struct mhi_dev_ring *ring,
 {
 	struct mhi_addr host_addr;
 
-	if (ring->mhi_dev->use_ipa) {
-		host_addr.host_pa = ring->ring_shadow.host_pa
+	host_addr.device_pa = ring->ring_shadow.device_pa
 			+ sizeof(union mhi_dev_ring_element_type) * start;
-		host_addr.phy_addr = ring->ring_cache_dma_handle +
-			(sizeof(union mhi_dev_ring_element_type) * start);
-	} else {
-		host_addr.device_va = ring->ring_shadow.device_va
+	host_addr.device_va = ring->ring_shadow.device_va
 			+ sizeof(union mhi_dev_ring_element_type) * start;
-		host_addr.virt_addr = &ring->ring_cache[start];
-	}
-	host_addr.size = (end-start) * sizeof(union mhi_dev_ring_element_type);
+	host_addr.host_pa = ring->ring_shadow.host_pa
+			+ sizeof(union mhi_dev_ring_element_type) * start;
 	if (start < end) {
-		mhi_dev_read_from_host(ring->mhi_dev, &host_addr);
+		mhi_dev_read_from_host(&host_addr,
+			(ring->ring_cache_dma_handle +
+			sizeof(union mhi_dev_ring_element_type) * start),
+			(end-start) *
+			sizeof(union mhi_dev_ring_element_type));
 	} else if (start > end) {
 		/* copy from 'start' to ring end, then ring start to 'end'*/
-		host_addr.size = (ring->ring_size-start) *
-					sizeof(union mhi_dev_ring_element_type);
-		mhi_dev_read_from_host(ring->mhi_dev, &host_addr);
+		mhi_dev_read_from_host(&host_addr,
+			(ring->ring_cache_dma_handle +
+			sizeof(union mhi_dev_ring_element_type) * start),
+			(ring->ring_size-start) *
+			sizeof(union mhi_dev_ring_element_type));
 		if (end) {
 			/* wrapped around */
 			host_addr.device_pa = ring->ring_shadow.device_pa;
 			host_addr.device_va = ring->ring_shadow.device_va;
 			host_addr.host_pa = ring->ring_shadow.host_pa;
-			host_addr.virt_addr = &ring->ring_cache[0];
-			host_addr.phy_addr = (ring->ring_cache_dma_handle +
+			mhi_dev_read_from_host(&host_addr,
+				(ring->ring_cache_dma_handle +
 				sizeof(union mhi_dev_ring_element_type) *
-				start);
-			host_addr.size = (end *
-				sizeof(union mhi_dev_ring_element_type));
-			mhi_dev_read_from_host(ring->mhi_dev, &host_addr);
+				start),
+				end * sizeof(union mhi_dev_ring_element_type));
 		}
 	}
 
@@ -96,17 +95,17 @@ int mhi_dev_cache_ring(struct mhi_dev_ring *ring, uint32_t wr_offset)
 	mhi_ctx = ring->mhi_dev;
 
 	if (ring->wr_offset == wr_offset) {
-		mhi_log(MHI_MSG_VERBOSE,
+		mhi_log(MHI_MSG_INFO,
 			"nothing to cache for ring %d, local wr_ofst %d\n",
 			ring->id, ring->wr_offset);
-		mhi_log(MHI_MSG_VERBOSE,
+		mhi_log(MHI_MSG_INFO,
 			"new wr_offset %d\n", wr_offset);
 		return 0;
 	}
 
 	old_offset = ring->wr_offset;
 
-	mhi_log(MHI_MSG_VERBOSE,
+	mhi_log(MHI_MSG_ERROR,
 			"caching - rng size :%d local ofst:%d new ofst: %d\n",
 			(uint32_t) ring->ring_size, old_offset,
 			ring->wr_offset);
@@ -119,12 +118,12 @@ int mhi_dev_cache_ring(struct mhi_dev_ring *ring, uint32_t wr_offset)
 	if (ring->id >= mhi_ctx->ev_ring_start &&
 		ring->id < (mhi_ctx->ev_ring_start +
 				mhi_ctx->cfg.event_rings)) {
-		mhi_log(MHI_MSG_VERBOSE,
+		mhi_log(MHI_MSG_ERROR,
 				"not caching event ring %d\n", ring->id);
 		return 0;
 	}
 
-	mhi_log(MHI_MSG_VERBOSE, "caching ring %d, start %d, end %d\n",
+	mhi_log(MHI_MSG_ERROR, "caching ring %d, start %d, end %d\n",
 			ring->id, old_offset, wr_offset);
 
 	if (mhi_dev_fetch_ring_elements(ring, old_offset, wr_offset)) {
@@ -156,7 +155,7 @@ int mhi_dev_update_wr_offset(struct mhi_dev_ring *ring)
 			pr_err("%s: CMD DB read failed\n", __func__);
 			return rc;
 		}
-		mhi_log(MHI_MSG_VERBOSE,
+		mhi_log(MHI_MSG_ERROR,
 			"ring %d wr_offset from db 0x%x\n",
 			ring->id, (uint32_t) wr_offset);
 		break;
@@ -173,7 +172,7 @@ int mhi_dev_update_wr_offset(struct mhi_dev_ring *ring)
 			pr_err("%s: CH DB read failed\n", __func__);
 			return rc;
 		}
-		mhi_log(MHI_MSG_VERBOSE,
+		mhi_log(MHI_MSG_ERROR,
 			"ring %d wr_offset from db 0x%x\n",
 			ring->id, (uint32_t) wr_offset);
 		break;
@@ -207,7 +206,7 @@ int mhi_dev_process_ring_element(struct mhi_dev_ring *ring, uint32_t offset)
 	if (ring->ring_cb)
 		ring->ring_cb(ring->mhi_dev, el, (void *)ring);
 	else
-		mhi_log(MHI_MSG_ERROR, "No callback registered for ring %d\n",
+		mhi_log(MHI_MSG_INFO, "No callback registered for ring %d\n",
 				ring->id);
 
 	return 0;
@@ -248,7 +247,7 @@ int mhi_dev_process_ring(struct mhi_dev_ring *ring)
 			return rc;
 		}
 
-		mhi_log(MHI_MSG_VERBOSE,
+		mhi_log(MHI_MSG_ERROR,
 			"Processing ring (%d) rd_offset:%d, wr_offset:%d\n",
 			ring->id, ring->rd_offset, ring->wr_offset);
 
@@ -279,7 +278,7 @@ int mhi_dev_add_element(struct mhi_dev_ring *ring,
 	mhi_dev_update_wr_offset(ring);
 
 	if ((ring->rd_offset + 1) % ring->ring_size == ring->wr_offset) {
-		mhi_log(MHI_MSG_VERBOSE, "ring full to insert element\n");
+		mhi_log(MHI_MSG_INFO, "ring full to insert element\n");
 		return -EINVAL;
 	}
 
@@ -294,22 +293,17 @@ int mhi_dev_add_element(struct mhi_dev_ring *ring,
 	 * Write the element, ring_base has to be the
 	 * iomap of the ring_base for memcpy
 	 */
-
-	if (ring->mhi_dev->use_ipa)
-		host_addr.host_pa = ring->ring_shadow.host_pa +
+	host_addr.host_pa = ring->ring_shadow.host_pa +
 			sizeof(union mhi_dev_ring_element_type) * old_offset;
-	else
-		host_addr.device_va = ring->ring_shadow.device_va +
+	host_addr.device_va = ring->ring_shadow.device_va +
 			sizeof(union mhi_dev_ring_element_type) * old_offset;
 
-	host_addr.virt_addr = element;
-	host_addr.size = sizeof(union mhi_dev_ring_element_type);
+	mhi_log(MHI_MSG_ERROR, "adding element to ring (%d)\n", ring->id);
+	mhi_log(MHI_MSG_ERROR, "rd_ofset %d\n", ring->rd_offset);
+	mhi_log(MHI_MSG_ERROR, "type %d\n", element->generic.type);
 
-	mhi_log(MHI_MSG_VERBOSE, "adding element to ring (%d)\n", ring->id);
-	mhi_log(MHI_MSG_VERBOSE, "rd_ofset %d\n", ring->rd_offset);
-	mhi_log(MHI_MSG_VERBOSE, "type %d\n", element->generic.type);
-
-	mhi_dev_write_to_host(ring->mhi_dev, &host_addr);
+	mhi_dev_write_to_host(&host_addr, element,
+			sizeof(union mhi_dev_ring_element_type), ring->mhi_dev);
 
 	return 0;
 }
@@ -377,7 +371,7 @@ int mhi_ring_start(struct mhi_dev_ring *ring, union mhi_dev_ring_ctx *ctx,
 			return rc;
 	}
 
-	mhi_log(MHI_MSG_VERBOSE, "ctx ring_base:0x%x, rp:0x%x, wp:0x%x\n",
+	mhi_log(MHI_MSG_ERROR, "ctx ring_base:0x%x, rp:0x%x, wp:0x%x\n",
 			(uint32_t)ring->ring_ctx->generic.rbase,
 			(uint32_t)ring->ring_ctx->generic.rp,
 			(uint32_t)ring->ring_ctx->generic.wp);

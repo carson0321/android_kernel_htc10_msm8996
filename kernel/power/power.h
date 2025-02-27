@@ -3,9 +3,6 @@
 #include <linux/utsname.h>
 #include <linux/freezer.h>
 #include <linux/compiler.h>
-#ifdef CONFIG_HTC_POWER_DEBUG
-#include <linux/notifier.h>
-#endif
 
 struct swsusp_info {
 	struct new_utsname	uts;
@@ -77,26 +74,6 @@ static struct kobj_attribute _name##_attr = {	\
 		.mode = 0644,			\
 	},					\
 	.show	= _name##_show,			\
-	.store	= _name##_store,		\
-}
-
-#define power_ro_attr(_name)			\
-static struct kobj_attribute _name##_attr = {	\
-	.attr	= {				\
-		.name = __stringify(_name),	\
-		.mode = 0444,			\
-	},					\
-	.show	= _name##_show,			\
-	.store	= NULL,				\
-}
-
-#define power_wo_attr(_name)			\
-static struct kobj_attribute _name##_attr = {	\
-	.attr	= {				\
-		.name = __stringify(_name),	\
-		.mode = 0220,			\
-	},					\
-	.show	= NULL,				\
 	.store	= _name##_store,		\
 }
 
@@ -224,8 +201,6 @@ static inline void suspend_test_finish(const char *label) {}
 
 #ifdef CONFIG_PM_SLEEP
 /* kernel/power/main.c */
-extern int __pm_notifier_call_chain(unsigned long val, int nr_to_call,
-				    int *nr_calls);
 extern int pm_notifier_call_chain(unsigned long val);
 #endif
 
@@ -256,17 +231,10 @@ enum {
 
 extern int pm_test_level;
 
-extern void suspend_sys_sync_queue(void);
-extern int suspend_sys_sync_wait(void);
-
 #ifdef CONFIG_SUSPEND_FREEZER
 static inline int suspend_freeze_processes(void)
 {
 	int error;
-
-	error = suspend_sys_sync_wait();
-	if (error)
-		return error;
 
 	error = freeze_processes();
 	/*
@@ -328,7 +296,3 @@ extern int pm_wake_lock(const char *buf);
 extern int pm_wake_unlock(const char *buf);
 
 #endif /* !CONFIG_PM_WAKELOCKS */
-
-#ifdef CONFIG_HTC_POWER_DEBUG
-extern struct blocking_notifier_head *get_pm_chain_head(void);
-#endif

@@ -1516,7 +1516,6 @@ void __detach_mounts(struct dentry *dentry)
 		goto out_unlock;
 
 	lock_mount_hash();
-	event++;
 	while (!hlist_empty(&mp->m_list)) {
 		mnt = hlist_entry(mp->m_list.first, struct mount, mnt_mp_list);
 		umount_tree(mnt, 0);
@@ -2360,10 +2359,8 @@ static int do_new_mount(struct path *path, const char *fstype, int flags,
 			mnt_flags |= MNT_NODEV | MNT_LOCK_NODEV;
 		}
 		if (type->fs_flags & FS_USERNS_VISIBLE) {
-			if (!fs_fully_visible(type, &mnt_flags)) {
-				put_filesystem(type);
+			if (!fs_fully_visible(type, &mnt_flags))
 				return -EPERM;
-			}
 		}
 	}
 
@@ -2379,14 +2376,6 @@ static int do_new_mount(struct path *path, const char *fstype, int flags,
 	err = do_add_mount(real_mount(mnt), path, mnt_flags);
 	if (err)
 		mntput(mnt);
-
-	/* Async-fsync */
-	if (!err && !strcmp(fstype, "ext4") &&
-	    !strcmp(path->dentry->d_name.name, "data")) {
-		mnt->mnt_sb->fsync_flags |= FLAG_ASYNC_FSYNC;
-		mnt->mnt_sb->s_flags |= MS_EMERGENCY_RO;
-	}
-
 	return err;
 }
 
@@ -3067,10 +3056,6 @@ static void __init init_mount_tree(void)
 	set_fs_root(current->fs, &root);
 }
 
-#ifdef CONFIG_HTC_FD_MONITOR
-void create_fd_list_entry(struct kobject *kobj);
-#endif
-
 void __init mnt_init(void)
 {
 	unsigned u;
@@ -3107,10 +3092,6 @@ void __init mnt_init(void)
 	fs_kobj = kobject_create_and_add("fs", NULL);
 	if (!fs_kobj)
 		printk(KERN_WARNING "%s: kobj create error\n", __func__);
-
-#ifdef CONFIG_HTC_FD_MONITOR
-	create_fd_list_entry(fs_kobj);
-#endif
 	init_rootfs();
 	init_mount_tree();
 }
@@ -3220,7 +3201,7 @@ static bool fs_fully_visible(struct file_system_type *type, int *new_mnt_flags)
 		list_for_each_entry(child, &mnt->mnt_mounts, mnt_child) {
 			struct inode *inode = child->mnt_mountpoint->d_inode;
 			/* Only worry about locked mounts */
-			if (!(child->mnt.mnt_flags & MNT_LOCKED))
+			if (!(mnt->mnt.mnt_flags & MNT_LOCKED))
 				continue;
 			if (!S_ISDIR(inode->i_mode))
 				goto next;

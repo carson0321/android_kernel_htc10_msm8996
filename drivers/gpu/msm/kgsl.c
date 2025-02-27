@@ -42,7 +42,6 @@
 #include "kgsl_sync.h"
 #include "kgsl_compat.h"
 #include "kgsl_pool.h"
-#include "kgsl_htc.h"
 
 #undef MODULE_PARAM_PREFIX
 #define MODULE_PARAM_PREFIX "kgsl."
@@ -404,7 +403,6 @@ static int kgsl_mem_entry_attach_process(struct kgsl_device *device,
 
 	entry->id = id;
 	entry->priv = process;
-	entry->memdesc.private = process;
 
 	/*
 	 * Map the memory if a GPU address is already assigned, either through
@@ -441,7 +439,7 @@ static void kgsl_mem_entry_detach_process(struct kgsl_mem_entry *entry)
 	entry->id = 0;
 
 	type = kgsl_memdesc_usermem_type(&entry->memdesc);
-	atomic_long_sub(entry->memdesc.size, &entry->priv->stats[type].cur);
+	entry->priv->stats[type].cur -= entry->memdesc.size;
 	spin_unlock(&entry->priv->mem_lock);
 
 	kgsl_mmu_put_gpuaddr(&entry->memdesc);
@@ -1103,6 +1101,8 @@ static int kgsl_open_device(struct kgsl_device *device)
 		atomic_inc(&device->active_cnt);
 		kgsl_sharedmem_set(device, &device->memstore, 0, 0,
 				device->memstore.size);
+		kgsl_sharedmem_set(device, &device->scratch, 0, 0,
+				device->scratch.size);
 
 		result = device->ftbl->init(device);
 		if (result)
@@ -2110,23 +2110,21 @@ static int kgsl_setup_dmabuf_useraddr(struct kgsl_device *device,
 		if (fd != 0)
 			dmabuf = dma_buf_get(fd - 1);
 	}
+	up_read(&current->mm->mmap_sem);
 
-	if (IS_ERR_OR_NULL(dmabuf)) {
-		up_read(&current->mm->mmap_sem);
+	if (IS_ERR_OR_NULL(dmabuf))
 		return dmabuf ? PTR_ERR(dmabuf) : -ENODEV;
-	}
 
 	ret = kgsl_setup_dma_buf(device, pagetable, entry, dmabuf);
 	if (ret) {
 		dma_buf_put(dmabuf);
-		up_read(&current->mm->mmap_sem);
 		return ret;
 	}
 
 	/* Setup the user addr/cache mode for cache operations */
 	entry->memdesc.useraddr = hostptr;
 	_setup_cache_mode(entry, vma);
-	up_read(&current->mm->mmap_sem);
+
 	return 0;
 }
 #else
@@ -2163,7 +2161,7 @@ static long _gpuobj_map_useraddr(struct kgsl_device *device,
 		struct kgsl_mem_entry *entry,
 		struct kgsl_gpuobj_import *param)
 {
-	struct kgsl_gpuobj_import_useraddr useraddr = {0};
+	struct kgsl_gpuobj_import_useraddr useraddr;
 	int ret;
 
 	param->flags &= KGSL_MEMFLAGS_GPUREADONLY
@@ -2940,7 +2938,6 @@ static struct kgsl_mem_entry *gpumem_alloc_entry(
 	struct kgsl_process_private *private = dev_priv->process_priv;
 	struct kgsl_mem_entry *entry;
 	unsigned int align;
-	struct kgsl_memdesc *memdesc = NULL;
 
 	flags &= KGSL_MEMFLAGS_GPUREADONLY
 		| KGSL_CACHEMODE_MASK
@@ -2984,8 +2981,6 @@ static struct kgsl_mem_entry *gpumem_alloc_entry(
 	flags = kgsl_filter_cachemode(flags);
 
 	entry = kgsl_mem_entry_create();
-	memdesc = &entry->memdesc;
-
 	if (entry == NULL)
 		return ERR_PTR(-ENOMEM);
 
@@ -2995,7 +2990,6 @@ static struct kgsl_mem_entry *gpumem_alloc_entry(
 	if (flags & KGSL_MEMFLAGS_SECURE)
 		entry->memdesc.priv |= KGSL_MEMDESC_SECURE;
 
-	memdesc->private = private;
 	ret = kgsl_allocate_user(dev_priv->device, &entry->memdesc,
 		size, flags);
 	if (ret != 0)
@@ -3306,7 +3300,7 @@ kgsl_mmap_memstore(struct kgsl_device *device, struct vm_area_struct *vma)
 		return -EINVAL;
 	}
 
-	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 
 	result = remap_pfn_range(vma, vma->vm_start,
 				device->memstore.physaddr >> PAGE_SHIFT,
@@ -3922,7 +3916,6 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 		device->id, device->reg_phys, device->reg_len);
 
 	rwlock_init(&device->context_lock);
-	spin_lock_init(&device->submit_lock);
 
 	setup_timer(&device->idle_timer, kgsl_timer, (unsigned long) device);
 
@@ -3935,14 +3928,16 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 	if (status)
 		goto error_close_mmu;
 
-	/* Initialize the memory pools */
-	kgsl_init_page_pools(device->pdev);
-
 	status = kgsl_allocate_global(device, &device->memstore,
 		KGSL_MEMSTORE_SIZE, 0, KGSL_MEMDESC_CONTIG, "memstore");
 
 	if (status != 0)
 		goto error_close_mmu;
+
+	status = kgsl_allocate_global(device, &device->scratch,
+		PAGE_SIZE, 0, 0, "scratch");
+	if (status != 0)
+		goto error_free_memstore;
 
 	/*
 	 * The default request type PM_QOS_REQ_ALL_CORES is
@@ -3987,11 +3982,13 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 	/* Initialize common sysfs entries */
 	kgsl_pwrctrl_init_sysfs(device);
 
-	/* Initialize htc feature */
-	kgsl_device_htc_init(device);
+	/* Initialize the memory pools */
+	kgsl_init_page_pools();
 
 	return 0;
 
+error_free_memstore:
+	kgsl_free_global(device, &device->memstore);
 error_close_mmu:
 	kgsl_mmu_close(device);
 error_pwrctrl_close:
@@ -4017,6 +4014,8 @@ void kgsl_device_platform_remove(struct kgsl_device *device)
 		pm_qos_remove_request(&device->pwrctrl.l2pc_cpus_qos);
 
 	idr_destroy(&device->context_idr);
+
+	kgsl_free_global(device, &device->scratch);
 
 	kgsl_free_global(device, &device->memstore);
 
@@ -4059,8 +4058,6 @@ static void kgsl_core_exit(void)
 static int __init kgsl_core_init(void)
 {
 	int result = 0;
-	struct sched_param param = { .sched_priority = 2 };
-
 	/* alloc major and minor device numbers */
 	result = alloc_chrdev_region(&kgsl_driver.major, 0, KGSL_DEVICE_MAX,
 		"kgsl");
@@ -4126,18 +4123,6 @@ static int __init kgsl_core_init(void)
 	kgsl_driver.mem_workqueue = alloc_workqueue("kgsl-mementry",
 		WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
 
-	init_kthread_worker(&kgsl_driver.worker);
-
-	kgsl_driver.worker_thread = kthread_run(kthread_worker_fn,
-		&kgsl_driver.worker, "kgsl_worker_thread");
-
-	if (IS_ERR(kgsl_driver.worker_thread)) {
-		pr_err("unable to start kgsl thread\n");
-		goto err;
-	}
-
-	sched_setscheduler(kgsl_driver.worker_thread, SCHED_FIFO, &param);
-
 	kgsl_events_init();
 
 	result = kgsl_cmdbatch_init();
@@ -4145,8 +4130,6 @@ static int __init kgsl_core_init(void)
 		goto err;
 
 	kgsl_memfree_init();
-
-	kgsl_driver_htc_init(&kgsl_driver.priv);
 
 	return 0;
 

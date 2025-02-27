@@ -132,9 +132,6 @@ struct mmc_ext_csd {
 	u8			cmdq_support;		/* 308 */
 	u8			barrier_support;	/* 486 */
 	u8			barrier_en;
-	u8			pre_eol_info;		/* 267 */
-	u8			device_life_time_est_typ_a;	/* 268 */
-	u8			device_life_time_est_typ_b;	/* 269 */
 
 	u8			fw_version;		/* 254 */
 
@@ -489,7 +486,7 @@ struct mmc_fixup {
 #define CID_MANFID_MICRON	0x13
 #define CID_MANFID_SAMSUNG	0x15
 #define CID_MANFID_KINGSTON	0x70
-#define CID_MANFID_HYNIX        0x90
+#define CID_MANFID_HYNIX	0x90
 #define CID_MANFID_NUMONYX_MICRON 0xfe
 
 #define CID_MANFID_ANY (-1u)

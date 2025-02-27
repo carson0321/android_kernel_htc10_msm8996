@@ -34,7 +34,6 @@
 #include <linux/slab.h>
 #include <linux/compiler.h>
 #include <linux/pstore_ram.h>
-#include <linux/htc_debug_tools.h>
 
 #define RAMOOPS_KERNMSG_HDR "===="
 #define MIN_MEM_SIZE 4096UL
@@ -306,24 +305,6 @@ static int notrace ramoops_pstore_write_buf(enum pstore_type_id type,
 	return 0;
 }
 
-static int notrace ramoops_pstore_write_buf_user(enum pstore_type_id type,
-						 enum kmsg_dump_reason reason,
-						 u64 *id, unsigned int part,
-						 const char __user *buf,
-						 bool compressed, size_t size,
-						 struct pstore_info *psi)
-{
-	if (type == PSTORE_TYPE_PMSG) {
-		struct ramoops_context *cxt = psi->data;
-
-		if (!cxt->mprz)
-			return -ENOMEM;
-		return persistent_ram_write_user(cxt->mprz, buf, size);
-	}
-
-	return -EINVAL;
-}
-
 static int ramoops_pstore_erase(enum pstore_type_id type, u64 id, int count,
 				struct timespec time, struct pstore_info *psi)
 {
@@ -362,7 +343,6 @@ static struct ramoops_context oops_cxt = {
 		.open	= ramoops_pstore_open,
 		.read	= ramoops_pstore_read,
 		.write_buf	= ramoops_pstore_write_buf,
-		.write_buf_user	= ramoops_pstore_write_buf_user,
 		.erase	= ramoops_pstore_erase,
 	},
 };
@@ -410,7 +390,7 @@ static int ramoops_init_przs(struct device *dev, struct ramoops_context *cxt,
 
 		cxt->przs[i] = persistent_ram_new(*paddr, sz, 0,
 						  &cxt->ecc_info,
-						  cxt->memtype, 0);
+						  cxt->memtype);
 		if (IS_ERR(cxt->przs[i])) {
 			err = PTR_ERR(cxt->przs[i]);
 			dev_err(dev, "failed to request mem region (0x%zx@0x%llx): %d\n",
@@ -440,8 +420,7 @@ static int ramoops_init_prz(struct device *dev, struct ramoops_context *cxt,
 		return -ENOMEM;
 	}
 
-	*prz = persistent_ram_new(*paddr, sz, sig, &cxt->ecc_info,
-				  cxt->memtype, 0);
+	*prz = persistent_ram_new(*paddr, sz, sig, &cxt->ecc_info, cxt->memtype);
 	if (IS_ERR(*prz)) {
 		int err = PTR_ERR(*prz);
 
@@ -563,13 +542,6 @@ static int ramoops_probe(struct platform_device *pdev)
 		cxt->size, (unsigned long long)cxt->phys_addr,
 		cxt->ecc_info.ecc_size, cxt->ecc_info.block_size);
 
-#if defined(CONFIG_HTC_DEBUG_BOOTLOADER_LOG)
-	if (cxt->console_size)
-	{
-		bldr_log_init();
-	}
-#endif
-
 	return 0;
 
 fail_buf:
@@ -603,9 +575,6 @@ static int __exit ramoops_remove(struct platform_device *pdev)
 	/* TODO(kees): When pstore supports unregistering, call it here. */
 	kfree(cxt->pstore.buf);
 	cxt->pstore.bufsize = 0;
-#if defined(CONFIG_HTC_DEBUG_BOOTLOADER_LOG)
-	bldr_log_release();
-#endif
 
 	return 0;
 #endif

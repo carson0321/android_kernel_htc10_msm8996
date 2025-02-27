@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -62,7 +62,6 @@
 #define MDSS_DSI_HW_REV_STEP_1		0x1
 #define MDSS_DSI_HW_REV_STEP_2		0x2
 
-#define MDSS_STATUS_TE_WAIT_MAX		3
 #define NONE_PANEL "none"
 
 enum {		/* mipi dsi panel */
@@ -99,7 +98,6 @@ enum dsi_panel_bl_ctrl {
 	BL_PWM,
 	BL_WLED,
 	BL_DCS_CMD,
-	BL_BACKLIGHT,
 	UNKNOWN_CTRL,
 };
 
@@ -110,7 +108,6 @@ enum dsi_panel_status_mode {
 	ESD_REG_NT35596,
 	ESD_TE,
 	ESD_TE_V2,
-	ESD_VENDOR,
 	ESD_MAX,
 };
 
@@ -136,7 +133,6 @@ enum dsi_pm_type {
 	DSI_CORE_PM,
 	DSI_CTRL_PM,
 	DSI_PHY_PM,
-	DSI_PANEL_PM2, /* HTC: for 2nd stage panel power data */
 	DSI_MAX_PM
 };
 
@@ -345,7 +341,6 @@ struct dsi_panel_timing {
 	char t_clk_post;
 	char t_clk_pre;
 	struct dsi_panel_cmds on_cmds;
-	struct dsi_panel_cmds post_on_cmds;
 	struct dsi_panel_cmds post_panel_on_cmds;
 	struct dsi_panel_cmds switch_cmds;
 };
@@ -441,8 +436,7 @@ struct mdss_dsi_ctrl_pdata {
 	int bklt_en_gpio;
 	int vddio_gpio;
 	int mode_gpio;
-	int intf_mux_gpio;
-	int bklt_ctrl[MAX_MDSS_BACKLIGHT];	/* backlight ctrl */
+	int bklt_ctrl;	/* backlight ctrl */
 	bool pwm_pmi;
 	int pwm_period;
 	int pwm_pmic_gpio;
@@ -455,7 +449,6 @@ struct mdss_dsi_ctrl_pdata {
 	bool dsi_irq_line;
 	bool dcs_cmd_insert;
 	atomic_t te_irq_ready;
-	bool idle;
 
 	bool cmd_sync_wait_broadcast;
 	bool cmd_sync_wait_trigger;
@@ -475,15 +468,10 @@ struct mdss_dsi_ctrl_pdata {
 	struct mdss_intf_recovery *mdp_callback;
 
 	struct dsi_panel_cmds on_cmds;
-	struct dsi_panel_cmds post_on_cmds;
 	struct dsi_panel_cmds post_dms_on_cmds;
 	struct dsi_panel_cmds post_panel_on_cmds;
 	struct dsi_panel_cmds off_cmds;
-	struct dsi_panel_cmds lp_on_cmds;
-	struct dsi_panel_cmds lp_off_cmds;
 	struct dsi_panel_cmds status_cmds;
-	struct dsi_panel_cmds idle_on_cmds; /* for lp mode */
-	struct dsi_panel_cmds idle_off_cmds;
 	u32 *status_valid_params;
 	u32 *status_cmds_rlen;
 	u32 *status_value;
@@ -503,7 +491,6 @@ struct mdss_dsi_ctrl_pdata {
 	struct completion video_comp;
 	struct completion dynamic_comp;
 	struct completion bta_comp;
-	struct completion te_irq_comp;
 	spinlock_t irq_lock;
 	spinlock_t mdp_lock;
 	int mdp_busy;
@@ -567,9 +554,7 @@ struct mdss_dsi_ctrl_pdata {
 
 	bool phy_power_off;
 
-	/* HTC: ADD */
-	struct dsi_panel_cmds on_fixup_cmds;
-
+	/*HTC: ADD*/
 	struct dsi_panel_cmds cabc_off_cmds;
 	struct dsi_panel_cmds cabc_ui_cmds;
 	struct dsi_panel_cmds cabc_video_cmds;
@@ -582,19 +567,22 @@ struct mdss_dsi_ctrl_pdata {
 	struct dsi_panel_cmds burst_on_cmds;
 	struct dsi_panel_cmds burst_off_cmds;
 
-	struct dss_module_power panel_power_data_ext;
-	struct backlight_device *bklt_dev[MAX_MDSS_BACKLIGHT];
+	int burst_on_level;
+	int burst_off_level;
+};
 
-	struct dsi_panel_cmds aod_cmds[3];
-	int ext_rst_gpio;
+struct te_data {
+	bool irq_enabled;
+	int irq;
+	int count;
+	spinlock_t spinlock;
 };
 
 struct dsi_status_data {
 	struct notifier_block fb_notifier;
 	struct delayed_work check_status;
 	struct msm_fb_data_type *mfd;
-	struct notifier_block vendor_notifier;
-	bool   vendor_esd_error;
+	struct te_data te;
 };
 
 void mdss_dsi_read_hw_revision(struct mdss_dsi_ctrl_pdata *ctrl);
@@ -705,7 +693,6 @@ void mdss_dsi_set_burst_mode(struct mdss_dsi_ctrl_pdata *ctrl);
 void mdss_dsi_set_reg(struct mdss_dsi_ctrl_pdata *ctrl, int off,
 	u32 mask, u32 val);
 int mdss_dsi_phy_pll_reset_status(struct mdss_dsi_ctrl_pdata *ctrl);
-int mdss_dsi_panel_power_ctrl(struct mdss_panel_data *pdata, int power_state);
 
 static inline const char *__mdss_dsi_pm_name(enum dsi_pm_type module)
 {
@@ -714,7 +701,6 @@ static inline const char *__mdss_dsi_pm_name(enum dsi_pm_type module)
 	case DSI_CTRL_PM:	return "DSI_CTRL_PM";
 	case DSI_PHY_PM:	return "DSI_PHY_PM";
 	case DSI_PANEL_PM:	return "PANEL_PM";
-	case DSI_PANEL_PM2:	return "PANEL_PM_2";
 	default:		return "???";
 	}
 }
@@ -727,7 +713,6 @@ static inline const char *__mdss_dsi_pm_supply_node_name(
 	case DSI_CTRL_PM:	return "qcom,ctrl-supply-entries";
 	case DSI_PHY_PM:	return "qcom,phy-supply-entries";
 	case DSI_PANEL_PM:	return "qcom,panel-supply-entries";
-	case DSI_PANEL_PM2:	return "htc,panel-supply-entries-stage2";
 	default:		return "???";
 	}
 }
@@ -910,11 +895,6 @@ static inline bool mdss_dsi_is_panel_on_interactive(
 static inline bool mdss_dsi_is_panel_on_lp(struct mdss_panel_data *pdata)
 {
 	return mdss_panel_is_power_on_lp(pdata->panel_info.panel_power_state);
-}
-
-static inline bool mdss_dsi_is_panel_on_ulp(struct mdss_panel_data *pdata)
-{
-	return mdss_panel_is_power_on_ulp(pdata->panel_info.panel_power_state);
 }
 
 static inline bool mdss_dsi_ulps_feature_enabled(

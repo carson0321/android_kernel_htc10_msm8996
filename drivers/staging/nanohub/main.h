@@ -22,17 +22,9 @@
 #include <linux/spinlock.h>
 #include <linux/semaphore.h>
 #include <linux/wakelock.h>
-#ifdef CONFIG_NANOHUB_HTC_LOG
-#ifdef CONFIG_FB
-#include <linux/notifier.h>
-#include <linux/fb.h>
-#endif
-#endif
 
 #include "comms.h"
 #include "bl.h"
-
-#include <linux/nanohub_htc.h>
 
 #define NANOHUB_NAME "nanohub"
 
@@ -69,7 +61,7 @@ struct nanohub_data {
 
 	struct nanohub_comms comms;
 	struct nanohub_bl bl;
-	struct nanohub_platform_data *pdata;
+	const struct nanohub_platform_data *pdata;
 	int irq1;
 	int irq2;
 
@@ -93,30 +85,6 @@ struct nanohub_data {
 	int err_cnt;
 	void *vbuf;
 	struct task_struct *thread;
-
-/* HTC_START */
-	struct workqueue_struct *wq;
-	struct work_struct work_restore;
-	struct mutex cfg_lock;
-	#define NANOHUB_CFG_NUM 4
-	int cfg_restore_type[NANOHUB_CFG_NUM];
-
-	struct hal_cfg_data hal_cfg;
-	struct eza_cfg_data eza_cfg;
-#ifdef CONFIG_NANOHUB_TP_SWITCH
-	struct tou_cfg_data tou_cfg;
-#endif
-#ifdef CONFIG_NANOHUB_SECOND_DISP
-	struct snd_cfg_data snd_cfg;
-	struct pnt_cfg_data pnt_cfg;
-#endif
-	struct vib_trigger *vib_trigger;
-#ifdef CONFIG_NANOHUB_HTC_LOG
-#ifdef CONFIG_FB
-	struct notifier_block fb_notifier;
-#endif
-#endif
-/* HTC_END */
 };
 
 enum {

@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -20,18 +20,10 @@
 #include <linux/types.h>
 #include <linux/debugfs.h>
 
-#define KHZ_TO_HZ 1000
-
 /* panel id type */
 struct panel_id {
 	u16 id;
 	u16 type;
-};
-
-enum fps_resolution {
-	FPS_RESOLUTION_DEFAULT,
-	FPS_RESOLUTION_HZ,
-	FPS_RESOLUTION_KHZ,
 };
 
 #define DEFAULT_FRAME_RATE	60
@@ -115,16 +107,6 @@ enum {
 	MDSS_PANEL_POWER_ON,
 	MDSS_PANEL_POWER_LP1,
 	MDSS_PANEL_POWER_LP2,
-};
-
-enum {
-	MDSS_PANEL_POWER_EXT_EARLYOFF = 0,
-	MDSS_PANEL_POWER_EXT_LATEON,
-};
-
-enum {
-	MDSS_PANEL_LOW_PERSIST_MODE_OFF = 0,
-	MDSS_PANEL_LOW_PERSIST_MODE_ON,
 };
 
 enum {
@@ -275,11 +257,8 @@ enum mdss_intf_events {
 	MDSS_EVENT_DSI_RECONFIG_CMD,
 	MDSS_EVENT_DSI_RESET_WRITE_PTR,
 	MDSS_EVENT_PANEL_TIMING_SWITCH,
-	MDSS_EVENT_UPDATE_PARAMS,
-
 	MDSS_EVENT_PANEL_VDDIO_SWITCH_ON,
 	MDSS_EVENT_PANEL_VDDIO_SWITCH_OFF,
-
 	MDSS_EVENT_MAX,
 };
 
@@ -405,7 +384,6 @@ struct mipi_panel_info {
 	char traffic_mode;
 	char frame_rate;
 	/* command mode */
-	char frame_rate_idle;
 	char interleave_max;
 	char insert_dcs_cmd;
 	char wr_mem_continue;
@@ -430,9 +408,6 @@ struct mipi_panel_info {
 	char lp11_init;
 	u32  init_delay;
 	u32  post_init_delay;
-	u8 default_lanes;
-
-	u32  lp11_delay;
 };
 
 struct edp_panel_info {
@@ -623,69 +598,15 @@ struct mdss_panel_roi_alignment {
  *  bl_data: A point referring to backlight table related data
  */
 struct htc_backlight1_table {
-	bool apply_cali;
 	int size;
 	u16 *brt_data;
 	u16 *bl_data;
-	u16 *bl_data_raw;
 };
 
 enum {
 	PANEL_POWER_CTRL_DEFAULT,
 	PANEL_POWER_CTRL_HX8396C2,
 };
-
-enum {
-	PANEL_COLOR_PROFILE_NATIVE,
-	PANEL_COLOR_PROFILE_SRGB,
-	/* Reserved ... */
-	PANEL_COLOR_PROFILE_MAX
-};
-
-/**
- *  HTC: The formats of panel calibration data
- *
- *  PANEL_CALIB_NOT_SUPPORTED:  Not support calibration
- *  PANEL_CALIB_REV_1: calibration data stored in following manner
- *  	Brightness calibration data: 0x3B24~0x3B25
- *			1.	Value is not zero
- *			2.	Valid range: (x>0 && x<=20000)
- *		R calibration data: 0x3B26~0x3B27
- *		G calibration data: 0x3B28~0x3B29
- *		B calibration data: 0x3B3A~0x3B3B
- *			1.	Value is not zero
- *			2.	Valid range: (x>0 && x<256)
- */
-enum {
-	PANEL_CALIB_NOT_SUPPORTED = 0,
-	PANEL_CALIB_REV_1 = 1,
-};
-
-struct aod_panel_info {
-	bool supported;
-	bool enabled;
-	u32 xstart;
-	u32 ystart;
-	u32 width;
-	u32 height;
-
-	int power_state;
-	int req_state;
-	int next_state;
-	bool mode_changed;
-
-	int debug; // 0: None
-	           // 1: Reg Check Only, 2/3: Reg Check + Recovery/Workaround.
-};
-
-struct calibration_gain {
-	u16 BKL;
-	u16 R;
-	u16 G;
-	u16 B;
-};
-
-#define MAX_MDSS_BACKLIGHT 2
 
 struct mdss_panel_hdr_properties {
 	bool hdr_enabled;
@@ -834,21 +755,13 @@ struct mdss_panel_info {
 	/* debugfs structure for the panel */
 	struct mdss_panel_debugfs_info *debugfs_info;
 
-	/* persistence mode on/off */
-	bool persist_mode;
+	/*HTC add as below*/
+	struct htc_backlight1_table brt_bl_table;
+	int camera_blk;
+	int power_ctrl;
 
 	/* HDR properties of display panel*/
 	struct mdss_panel_hdr_properties hdr_properties;
-
-	/*HTC add as below*/
-	struct htc_backlight1_table brt_bl_table[MAX_MDSS_BACKLIGHT];
-	int camera_blk;
-	int power_ctrl;
-	int cali_data_format;
-	struct aod_panel_info aod;
-	struct calibration_gain cali_gain;
-	int burst_bl_value;
-	u32 panel_color_profile;
 };
 
 struct mdss_panel_timing {
@@ -887,8 +800,7 @@ struct mdss_panel_timing {
 
 struct mdss_panel_data {
 	struct mdss_panel_info panel_info;
-	void (*set_backlight) (struct mdss_panel_data *pdata, int id, u32 bl_level);
-	int (*apply_display_setting)(struct mdss_panel_data *pdata, u32 mode);
+	void (*set_backlight) (struct mdss_panel_data *pdata, u32 bl_level);
 	unsigned char *mmss_cc_base;
 
 	/**
@@ -905,7 +817,6 @@ struct mdss_panel_data {
 	 */
 	int (*event_handler) (struct mdss_panel_data *pdata, int e, void *arg);
 	struct device_node *(*get_fb_node)(struct platform_device *pdev);
-	bool (*get_idle)(struct mdss_panel_data *pdata);
 
 	struct list_head timings_list;
 	struct mdss_panel_timing *current_timing;
@@ -914,10 +825,6 @@ struct mdss_panel_data {
 	/* To store dsc cfg name passed by bootloader */
 	char dsc_cfg_np_name[MDSS_MAX_PANEL_LEN];
 	struct mdss_panel_data *next;
-	int panel_te_gpio;
-	struct completion te_done;
-
-	bool allow_primary_fb;
 };
 
 struct mdss_panel_debugfs_info {
@@ -932,31 +839,18 @@ struct mdss_panel_debugfs_info {
  * mdss_get_panel_framerate() - get panel frame rate based on panel information
  * @panel_info:	Pointer to panel info containing all panel information
  */
-static inline u32 mdss_panel_get_framerate(struct mdss_panel_info *panel_info,
-					   u32 flags)
+static inline u32 mdss_panel_get_framerate(struct mdss_panel_info *panel_info)
 {
 	u32 frame_rate, pixel_total;
 	u64 rate;
-	struct mdss_panel_data *panel_data =
-			container_of(panel_info, typeof(*panel_data),
-					panel_info);
-	bool idle = false;
 
-	if (panel_info == NULL) {
-		frame_rate = DEFAULT_FRAME_RATE;
-		goto end;
-	}
+	if (panel_info == NULL)
+		return DEFAULT_FRAME_RATE;
 
 	switch (panel_info->type) {
 	case MIPI_VIDEO_PANEL:
 	case MIPI_CMD_PANEL:
 		frame_rate = panel_info->mipi.frame_rate;
-		if (panel_data->get_idle)
-			idle = panel_data->get_idle(panel_data);
-		if (idle)
-			frame_rate = panel_info->mipi.frame_rate_idle;
-		else
-			frame_rate = panel_info->mipi.frame_rate;
 		break;
 	case EDP_PANEL:
 		frame_rate = panel_info->edp.frame_rate;
@@ -966,7 +860,9 @@ static inline u32 mdss_panel_get_framerate(struct mdss_panel_info *panel_info,
 		break;
 	case DTV_PANEL:
 		if (panel_info->dynamic_fps) {
-			frame_rate = panel_info->lcdc.frame_rate;
+			frame_rate = panel_info->lcdc.frame_rate / 1000;
+			if (panel_info->lcdc.frame_rate % 1000)
+				frame_rate += 1;
 			break;
 		}
 	default:
@@ -979,7 +875,7 @@ static inline u32 mdss_panel_get_framerate(struct mdss_panel_info *panel_info,
 			  panel_info->lcdc.v_pulse_width +
 			  panel_info->yres);
 		if (pixel_total) {
-			rate = panel_info->clk_rate * KHZ_TO_HZ;
+			rate = panel_info->clk_rate;
 			do_div(rate, pixel_total);
 			frame_rate = (u32)rate;
 		} else {
@@ -987,15 +883,6 @@ static inline u32 mdss_panel_get_framerate(struct mdss_panel_info *panel_info,
 		}
 		break;
 	}
-end:
-	if (flags == FPS_RESOLUTION_KHZ) {
-		if (!(frame_rate / KHZ_TO_HZ))
-			frame_rate *= KHZ_TO_HZ;
-	} else if (flags == FPS_RESOLUTION_HZ) {
-		if (frame_rate / KHZ_TO_HZ)
-			frame_rate /= KHZ_TO_HZ;
-	}
-
 	return frame_rate;
 }
 

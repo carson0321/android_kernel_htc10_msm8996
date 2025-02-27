@@ -22,8 +22,6 @@
 #include <linux/sched.h>
 #include <linux/ratelimit.h>
 #include <linux/timer.h>
-#include <linux/platform_device.h>
-#include <linux/msm_mhi.h>
 #ifdef CONFIG_DIAG_OVER_USB
 #include <linux/usb/usbdiag.h>
 #endif
@@ -150,14 +148,6 @@ module_param(dci_activate, uint, S_IRUGO | S_IWUSR);
 /* Timer variables */
 static struct timer_list drain_timer;
 static int timer_in_progress;
-
-/*
- * Diag Mask clear variable
- * Used for clearing masks upon
- * USB disconnection and stopping ODL
- */
-static int diag_mask_clear_param = 1;
-module_param(diag_mask_clear_param, int, 0644);
 
 struct diag_apps_data_t {
 	void *buf;
@@ -377,9 +367,8 @@ static int diag_switch_logging(struct diag_logging_mode_param_t *param);
 /*++ 2015/07/14, USB Team, PCN00012 ++*/
 #define COPY_USER_SPACE_OR_EXIT(buf, data, length)		\
 do {								\
-	if (count < ret+length)                 \
-		goto exit;                  \
-	if (copy_to_user(buf, (void *)&data, length)) {     \
+	if ((count < ret+length) || (copy_to_user(buf,		\
+			(void *)&data, length))) {		\
 		ret = -EFAULT;					\
 		goto exit;					\
 	}							\
@@ -493,10 +482,6 @@ static int diagchar_open(struct inode *inode, struct file *file)
 {
 	int i = 0;
 	void *temp;
-/*++ 2015/07/14, USB Team, PCN00012 ++*/
-	DIAG_INFO("%s:%s(parent:%s): tgid=%d\n", __func__,
-		current->comm, current->parent->comm, current->tgid);
-/*-- 2015/07/14, USB Team, PCN00012 --*/
 
 	if (driver) {
 		mutex_lock(&driver->diagchar_mutex);
@@ -527,11 +512,11 @@ static int diagchar_open(struct inode *inode, struct file *file)
 				diag_add_client(i, file);
 			} else {
 				mutex_unlock(&driver->diagchar_mutex);
-				pr_alert("Max client limit for DIAG reached\n");
-				DIAG_INFO("Cannot open handle %s"
-					   " %d", current->comm, current->tgid);/*++ 2015/07/14, USB Team, PCN00012 ++*/
+				pr_err_ratelimited("diag: Max client limit for DIAG reached\n");
+				pr_err_ratelimited("diag: Cannot open handle %s"
+					   " %d", current->comm, current->tgid);
 				for (i = 0; i < driver->num_clients; i++)
-					DIAG_WARNING("%d) %s PID=%d", i, driver->
+					pr_debug("%d) %s PID=%d", i, driver->
 						client_map[i].name,
 						driver->client_map[i].pid);/*++ 2015/07/14, USB Team, PCN00012 ++*/
 				return -ENOMEM;
@@ -576,10 +561,7 @@ static uint32_t diag_translate_kernel_to_user_mask(uint32_t peripheral_mask)
 
 	return ret;
 }
-int diag_mask_param(void)
-{
-	return diag_mask_clear_param;
-}
+
 void diag_clear_masks(struct diag_md_session_t *info)
 {
 	int ret;
@@ -612,8 +594,7 @@ static void diag_close_logging_process(const int pid)
 	if (!session_info)
 		return;
 
-	if (diag_mask_clear_param)
-		diag_clear_masks(session_info);
+	diag_clear_masks(session_info);
 
 	mutex_lock(&driver->diag_maskclear_mutex);
 	driver->mask_clear = 1;
@@ -640,7 +621,6 @@ static int diag_remove_client_entry(struct file *file)
 	struct diagchar_priv *diagpriv_data = NULL;
 	struct diag_dci_client_tbl *dci_entry = NULL;
 
-	DIAG_DBUG("diag: process exit %s\n", current->comm);
 	if (!driver)
 		return -ENOMEM;
 
@@ -832,11 +812,6 @@ static void diag_cmd_invalidate_polling(int change_flag)
 	driver->polling_reg_flag = 0;
 	list_for_each_safe(start, temp, &driver->cmd_reg_list) {
 		item = list_entry(start, struct diag_cmd_reg_t, link);
-		if (&item->entry == NULL) {
-			pr_err("diag: In %s, unable to search command\n",
-			       __func__);
-			return;
-		}
 		polling = diag_cmd_chk_polling(&item->entry);
 		if (polling == DIAG_CMD_POLLING) {
 			driver->polling_reg_flag = 1;
@@ -901,11 +876,6 @@ struct diag_cmd_reg_entry_t *diag_cmd_search(
 
 	list_for_each_safe(start, temp, &driver->cmd_reg_list) {
 		item = list_entry(start, struct diag_cmd_reg_t, link);
-		if (&item->entry == NULL) {
-			pr_err("diag: In %s, unable to search command\n",
-			       __func__);
-			return NULL;
-		}
 		temp_entry = &item->entry;
 		if (temp_entry->cmd_code == entry->cmd_code &&
 		    temp_entry->subsys_id == entry->subsys_id &&
@@ -983,12 +953,6 @@ void diag_cmd_remove_reg_by_pid(int pid)
 	mutex_lock(&driver->cmd_reg_mutex);
 	list_for_each_safe(start, temp, &driver->cmd_reg_list) {
 		item = list_entry(start, struct diag_cmd_reg_t, link);
-		if (&item->entry == NULL) {
-			pr_err("diag: In %s, unable to search command\n",
-			       __func__);
-			mutex_unlock(&driver->cmd_reg_mutex);
-			return;
-		}
 		if (item->pid == pid) {
 			list_del(&item->link);
 			kfree(item);
@@ -1007,12 +971,6 @@ void diag_cmd_remove_reg_by_proc(int proc)
 	mutex_lock(&driver->cmd_reg_mutex);
 	list_for_each_safe(start, temp, &driver->cmd_reg_list) {
 		item = list_entry(start, struct diag_cmd_reg_t, link);
-		if (&item->entry == NULL) {
-			pr_err("diag: In %s, unable to search command\n",
-			       __func__);
-			mutex_unlock(&driver->cmd_reg_mutex);
-			return;
-		}
 		if (item->proc == proc) {
 			list_del(&item->link);
 			kfree(item);
@@ -1089,7 +1047,7 @@ drop:
 		COPY_USER_SPACE_OR_EXIT(buf+8, total_data_len, 4);
 		ret -= 4;
 	} else {
-		DIAG_DBUG("diag: In %s, Trying to copy ZERO bytes, total_data_len: %d\n",
+		pr_debug("diag: In %s, Trying to copy ZERO bytes, total_data_len: %d\n",
 			__func__, total_data_len);
 	}
 
@@ -1175,11 +1133,6 @@ static int diag_send_raw_data_remote(int proc, void *buf, int len,
 	else
 		hdlc_disabled = driver->hdlc_disabled;
 	if (hdlc_disabled) {
-		if (len < 4) {
-			pr_err("diag: In %s, invalid len: %d of non_hdlc pkt",
-			__func__, len);
-			return -EBADMSG;
-		}
 		payload = *(uint16_t *)(buf + 2);
 		if (payload > DIAG_MAX_HDLC_BUF_SIZE) {
 			pr_err("diag: Dropping packet, payload size is %d\n",
@@ -1188,21 +1141,11 @@ static int diag_send_raw_data_remote(int proc, void *buf, int len,
 		}
 		driver->hdlc_encode_buf_len = payload;
 		/*
-		 * Adding 5 bytes for start (1 byte), version (1 byte),
-		 * payload (2 bytes) and end (1 byte)
+		 * Adding 4 bytes for start (1 byte), version (1 byte) and
+		 * payload (2 bytes)
 		 */
-		if (len == (payload + 5)) {
-			/*
-			 * Adding 4 bytes for start (1 byte), version (1 byte)
-			 * and payload (2 bytes)
-			 */
-			memcpy(driver->hdlc_encode_buf, buf + 4, payload);
-			goto send_data;
-		} else {
-			pr_err("diag: In %s, invalid len: %d of non_hdlc pkt",
-			__func__, len);
-			return -EBADMSG;
-		}
+		memcpy(driver->hdlc_encode_buf, buf + 4, payload);
+		goto send_data;
 	}
 
 	if (hdlc_flag) {
@@ -1240,7 +1183,7 @@ static int diag_send_raw_data_remote(int proc, void *buf, int len,
 					(void *)driver->hdlc_encode_buf);
 
 send_data:
-	err = diagfwd_bridge_write(bridge_index, driver->hdlc_encode_buf,
+	err = diagfwd_bridge_write(proc, driver->hdlc_encode_buf,
 				   driver->hdlc_encode_buf_len);
 	if (err) {
 		pr_err_ratelimited("diag: Error writing Callback packet to proc: %d, err: %d\n",
@@ -1949,18 +1892,14 @@ static int diag_ioctl_lsm_deinit(void)
 {
 	int i;
 
-	mutex_lock(&driver->diagchar_mutex);
 	for (i = 0; i < driver->num_clients; i++)
 		if (driver->client_map[i].pid == current->tgid)
 			break;
 
-	if (i == driver->num_clients) {
-		mutex_unlock(&driver->diagchar_mutex);
+	if (i == driver->num_clients)
 		return -EINVAL;
-	}
 
 	driver->data_ready[i] |= DEINIT_TYPE;
-	mutex_unlock(&driver->diagchar_mutex);
 	wake_up_interruptible(&driver->wait_q);
 
 	return 1;
@@ -2274,11 +2213,6 @@ long diagchar_compat_ioctl(struct file *filp,
 	struct diag_dci_client_tbl *dci_client = NULL;
 	struct diag_logging_mode_param_t mode_param;
 
-/*++ 2015/07/14, USB Team, PCN00012 ++*/
-	DIAG_INFO("%s:%s(parent:%s): tgid=%d, iocmd=%d, ioarg=%d\n", __func__,
-		current->comm, current->parent->comm, current->tgid, (int)iocmd, (int)ioarg);
-/*-- 2015/07/14, USB Team, PCN00012 --*/
-
 	switch (iocmd) {
 	case DIAG_IOCTL_COMMAND_REG:
 		result = diag_ioctl_cmd_reg_compat(ioarg);
@@ -2418,12 +2352,6 @@ long diagchar_ioctl(struct file *filp,
 	struct diag_dci_client_tbl *dci_client = NULL;
 	struct diag_logging_mode_param_t mode_param;
 
-/*++ 2015/07/14, USB Team, PCN00012 ++*/
-	DIAG_INFO("%s:%s(parent:%s): tgid=%d, iocmd=%d, ioarg=%d\n", __func__,
-			current->comm, current->parent->comm,
-			current->tgid, (int)iocmd, (int)ioarg);
-/*-- 2015/07/14, USB Team, PCN00012 --*/
-
 	switch (iocmd) {
 	case DIAG_IOCTL_COMMAND_REG:
 		result = diag_ioctl_cmd_reg(ioarg);
@@ -2471,9 +2399,7 @@ long diagchar_ioctl(struct file *filp,
 		mutex_unlock(&driver->dci_mutex);
 		break;
 	case DIAG_IOCTL_DCI_EVENT_STATUS:
-		mutex_lock(&driver->dci_mutex);
 		result = diag_ioctl_dci_event_status(ioarg);
-		mutex_unlock(&driver->dci_mutex);
 		break;
 	case DIAG_IOCTL_DCI_CLEAR_LOGS:
 		mutex_lock(&driver->dci_mutex);
@@ -2543,7 +2469,6 @@ long diagchar_ioctl(struct file *filp,
 			return -EINVAL;
 		mutex_lock(&driver->diagchar_mutex);
 		driver->client_map[i].timeout = (int)ioarg;
-		driver->data_ready[i] = 0x0;
 		mutex_unlock(&driver->diagchar_mutex);
 
 		result = 1;
@@ -2870,7 +2795,7 @@ static int diag_user_process_raw_data(const char __user *buf, int len)
 		}
 	}
 	if (remote_proc) {
-		ret = diag_send_raw_data_remote(remote_proc,
+		ret = diag_send_raw_data_remote(remote_proc - 1,
 				(void *)(user_space_data + token_offset),
 				len, USER_SPACE_RAW_DATA);
 		if (ret) {
@@ -2925,7 +2850,7 @@ static int diag_user_process_userspace_data(const char __user *buf, int len)
 	}
 /*++ 2015/07/14, USB Team, PCN00012 ++*/
 	if (diag_verbose_mask) {
-		DIAG_INFO("diag: user space data %d\n", len);
+		pr_info("diag: user space data %d\n", len);
 		print_hex_dump(KERN_INFO, "write packet data"
 				" to modem(first 16 bytes)", 16, 1,
 				DUMP_PREFIX_ADDRESS, driver->user_space_data_buf, 16, 1);
@@ -3037,7 +2962,7 @@ static int diag_user_process_apps_data(const char __user *buf, int len,
 		stm_size = stm_log_inv_ts(OST_ENTITY_DIAG, 0, user_space_data,
 					  len);
 		if (stm_size == 0) {
-			DIAG_DBUG("diag: In %s, stm_log_inv_ts returned size of 0\n",
+			pr_debug("diag: In %s, stm_log_inv_ts returned size of 0\n",
 				 __func__);
 		}
 		diagmem_free(driver, user_space_data, mempool);
@@ -3077,16 +3002,6 @@ static int diag_user_process_apps_data(const char __user *buf, int len,
 	return 0;
 }
 
-static int check_data_ready(int index)
-{
-	int data_type = 0;
-
-	mutex_lock(&driver->diagchar_mutex);
-	data_type = driver->data_ready[index];
-	mutex_unlock(&driver->diagchar_mutex);
-	return data_type;
-}
-
 static ssize_t diagchar_read(struct file *file, char __user *buf, size_t count,
 			  loff_t *ppos)
 {
@@ -3099,7 +3014,6 @@ static ssize_t diagchar_read(struct file *file, char __user *buf, size_t count,
 	int write_len = 0;
 	struct diag_md_session_t *session_info = NULL;
 
-	mutex_lock(&driver->diagchar_mutex);
 	for (i = 0; i < driver->num_clients; i++)
 		if (driver->client_map[i].pid == current->tgid) {
 			index = i;
@@ -3107,7 +3021,6 @@ static ssize_t diagchar_read(struct file *file, char __user *buf, size_t count,
 			timeout = driver->client_map[i].timeout;
 		}
 /*-- 2015/07/14, USB Team, PCN00012 --*/
-	mutex_unlock(&driver->diagchar_mutex);
 
 	if (index == -1) {
 		pr_err("diag: Client PID not found in table");
@@ -3121,11 +3034,11 @@ static ssize_t diagchar_read(struct file *file, char __user *buf, size_t count,
 /*++ 2015/07/14, USB Team, PCN00012 ++*/
 	if (timeout)
 		w_ret = wait_event_interruptible_timeout(driver->wait_q,
-			(check_data_ready(index)) > 0, timeout * HZ);
+			driver->data_ready[index], timeout * HZ);
 	else
 		w_ret = wait_event_interruptible(driver->wait_q,
-			(check_data_ready(index)) > 0);
-	DIAG_DBUG("%s:%s(parent:%s): tgid=%d, w_ret=%d\n", __func__,
+			driver->data_ready[index]);
+	pr_debug("%s:%s(parent:%s): tgid=%d, w_ret=%d\n", __func__,
 		current->comm, current->parent->comm, current->tgid, w_ret);
 /*-- 2015/07/14, USB Team, PCN00012 --*/
 	mutex_lock(&driver->diagchar_mutex);
@@ -3133,7 +3046,7 @@ static ssize_t diagchar_read(struct file *file, char __user *buf, size_t count,
 	if ((driver->data_ready[index] & USER_SPACE_DATA_TYPE) &&
 	    (driver->logging_mode == DIAG_MEMORY_DEVICE_MODE ||
 	     driver->logging_mode == DIAG_MULTI_MODE)) {
-		DIAG_DBUG("diag: process woken up\n");
+		pr_debug("diag: process woken up\n");
 		/*Copy the type of data being passed*/
 		data_type = driver->data_ready[index] & USER_SPACE_DATA_TYPE;
 		driver->data_ready[index] ^= USER_SPACE_DATA_TYPE;
@@ -3150,8 +3063,8 @@ static ssize_t diagchar_read(struct file *file, char __user *buf, size_t count,
 		driver->data_ready[index] ^= USER_SPACE_DATA_TYPE;
 /*++ 2015/07/14, USB Team, PCN00012 ++*/
 	} else if (driver->data_ready[index] & USERMODE_DIAGFWD) {
-			DIAG_DBUG("diag: process woken up\n");
-			/*Copy the type of data being passed*/
+			pr_debug("diag: process woken up\n");
+			
 
 /*++ 2015/07/15, USB Team, PCN00013 ++*/
 			if (strncmp(current->comm, "diag_mdlog", 10) == 0
@@ -3163,8 +3076,7 @@ static ssize_t diagchar_read(struct file *file, char __user *buf, size_t count,
 			else
 				data_type = USERMODE_DIAGFWD;
 
-			DIAG_DBUG("data type= %d\n", data_type);
-/*-- 2015/07/15, USB Team, PCN00013 --*/
+			pr_debug("data type= %d\n", data_type);
 
 			driver->data_ready[index] ^= USERMODE_DIAGFWD;
 			COPY_USER_SPACE_OR_EXIT(buf, data_type, sizeof(int));
@@ -3288,11 +3200,11 @@ static ssize_t diagchar_read(struct file *file, char __user *buf, size_t count,
 	}
 
 exit:
+	mutex_unlock(&driver->diagchar_mutex);
 	if (driver->data_ready[index] & DCI_DATA_TYPE) {
-		data_type = driver->data_ready[index] & DCI_DATA_TYPE;
-		mutex_unlock(&driver->diagchar_mutex);
-		/* Copy the type of data being passed */
 		mutex_lock(&driver->dci_mutex);
+		/* Copy the type of data being passed */
+		data_type = driver->data_ready[index] & DCI_DATA_TYPE;
 		list_for_each_safe(start, temp, &driver->dci_client_list) {
 			entry = list_entry(start, struct diag_dci_client_tbl,
 									track);
@@ -3324,7 +3236,6 @@ exit:
 		mutex_unlock(&driver->dci_mutex);
 		goto end;
 	}
-	mutex_unlock(&driver->diagchar_mutex);
 end:
 	/*
 	 * Flush any read that is currently pending on DCI data and
@@ -3346,11 +3257,6 @@ static ssize_t diagchar_write(struct file *file, const char __user *buf,
 	int payload_len = 0;
 	const char __user *payload_buf = NULL;
 
-/*++ 2015/07/14, USB Team, PCN00012 ++*/
-	DIAG_DBUG("%s:%s(parent:%s): tgid=%d\n", __func__,
-		current->comm, current->parent->comm, current->tgid);
-/*-- 2015/07/14, USB Team, PCN00012 --*/
-
 	/*
 	 * The data coming from the user sapce should at least have the
 	 * packet type heeader.
@@ -3364,7 +3270,7 @@ static ssize_t diagchar_write(struct file *file, const char __user *buf,
 	err = copy_from_user((&pkt_type), buf, sizeof(int));
 	if (err) {
 		pr_err_ratelimited("diag: In %s, unable to copy pkt_type from userspace, err: %d\n",
-				__func__, err);
+				   __func__, err);
 		return -EIO;
 	}
 
@@ -3373,7 +3279,7 @@ static ssize_t diagchar_write(struct file *file, const char __user *buf,
 		    (pkt_type == DCI_PKT_TYPE) ||
 		    (pkt_type & DATA_TYPE_DCI_LOG) ||
 		    (pkt_type & DATA_TYPE_DCI_EVENT))) {
-			DIAG_DBUG("diag: In %s, Dropping non DCI packet type\n",
+			pr_debug("diag: In %s, Dropping non DCI packet type\n",
 				 __func__);
 			return -EIO;
 		}
@@ -3696,17 +3602,16 @@ static int diagchar_setup_cdev(dev_t devno)
 /*++ 2015/07/14, USB Team, PCN00012 ++*/
 	err = device_create_file(driver->diag_dev, &dev_attr_diag_reg_table);
 	if (err)
-		DIAG_INFO("dev_attr_diag_reg_table registration failed !\n\n");
+		pr_info("dev_attr_diag_reg_table registration failed !\n\n");
 	err = device_create_file(driver->diag_dev, &dev_attr_diag7k_debug_mask);
 	if (err)
-		DIAG_INFO("dev_attr_diag7k_debug_mask registration failed !\n\n");
+		pr_info("dev_attr_diag7k_debug_mask registration failed !\n\n");
 	err = device_create_file(driver->diag_dev, &dev_attr_diag9k_debug_mask);
 /*-- 2015/07/14, USB Team, PCN00012 --*/
 /*++ 2015/10/26, USB Team, PCN00033 ++*/
 	err = device_create_file(driver->diag_dev, &dev_attr_diag_rb);
 	if (err)
-		DIAG_INFO("dev_attr_diag_rb registration failed !\n\n");
-/*-- 2015/10/26, USB Team, PCN00033 --*/
+		pr_info("dev_attr_diag_rb registration failed !\n\n");
 	driver->diag_dev->power.wakeup = wakeup_source_register("DIAG_WS");
 	return 0;
 
@@ -3714,10 +3619,6 @@ static int diagchar_setup_cdev(dev_t devno)
 
 static int diagchar_cleanup(void)
 {
-/*++ 2015/07/14, USB Team, PCN00012 ++*/
-	DIAG_INFO("%s:%s(parent:%s): tgid=%d\n", __func__,
-		current->comm, current->parent->comm, current->tgid);
-/*-- 2015/07/14, USB Team, PCN00012 --*/
 	if (driver) {
 		if (driver->cdev) {
 			/* TODO - Check if device exists before deleting */
@@ -3733,41 +3634,6 @@ static int diagchar_cleanup(void)
 	return 0;
 }
 
-static int diag_mhi_probe(struct platform_device *pdev)
-{
-	int ret;
-
-	if (!mhi_is_device_ready(&pdev->dev, "qcom,mhi"))
-		return -EPROBE_DEFER;
-	driver->pdev = pdev;
-	ret = diag_remote_init();
-	if (ret) {
-		diag_remote_exit();
-		return ret;
-	}
-	ret = diagfwd_bridge_init();
-	if (ret) {
-		diagfwd_bridge_exit();
-		return ret;
-	}
-	pr_debug("diag: mhi device is ready\n");
-	return 0;
-}
-
-static const struct of_device_id diag_mhi_table[] = {
-	{.compatible = "qcom,diag-mhi"},
-	{},
-};
-
-static struct platform_driver diag_mhi_driver = {
-	.probe = diag_mhi_probe,
-	.driver = {
-		.name = "DIAG MHI Platform",
-		.owner = THIS_MODULE,
-		.of_match_table = diag_mhi_table,
-	},
-};
-
 static int __init diagchar_init(void)
 {
 	dev_t dev;
@@ -3777,7 +3643,7 @@ static int __init diagchar_init(void)
 	unsigned int radio_flag = get_radio_flag();
 	unsigned int kernel_flag = get_kernel_flag();
 
-	DIAG_WARNING("diagfwd initializing, kernel_flag=[0x%x] .., radio_flag=[0x%x]\n", kernel_flag, radio_flag);
+	pr_warn("diagfwd initializing, kernel_flag=[0x%x] .., radio_flag=[0x%x]\n", kernel_flag, radio_flag);
 
 	if (kernel_flag & KERNEL_FLAG_ENABLE_DIAG_LOG) {
 		diag7k_debug_mask = 1;
@@ -3826,12 +3692,10 @@ static int __init diagchar_init(void)
 	mutex_init(&driver->hdlc_disable_mutex);
 	mutex_init(&driver->diagchar_mutex);
 	mutex_init(&driver->diag_maskclear_mutex);
-	mutex_init(&driver->diag_notifier_mutex);
 	mutex_init(&driver->diag_file_mutex);
 	mutex_init(&driver->delayed_rsp_mutex);
 	mutex_init(&apps_data_mutex);
 	mutex_init(&driver->msg_mask_lock);
-	mutex_init(&driver->hdlc_recovery_mutex);
 	for (i = 0; i < NUM_PERIPHERALS; i++)
 		mutex_init(&driver->diagfwd_channel_mutex[i]);
 	init_waitqueue_head(&driver->wait_q);
@@ -3870,6 +3734,12 @@ static int __init diagchar_init(void)
 	ret = diagfwd_init();
 	if (ret)
 		goto fail;
+	ret = diag_remote_init();
+	if (ret)
+		goto fail;
+	ret = diagfwd_bridge_init();
+	if (ret)
+		goto fail;
 	ret = diagfwd_cntl_init();
 	if (ret)
 		goto fail;
@@ -3880,7 +3750,7 @@ static int __init diagchar_init(void)
 	diagfwd_cntl_channel_init();
 	if (driver->dci_state == DIAG_DCI_NO_ERROR)
 		diag_dci_channel_init();
-	DIAG_DBUG("diagchar initializing ..\n");
+	pr_debug("diagchar initializing ..\n");
 	driver->num = 1;
 	driver->name = ((void *)driver) + sizeof(struct diagchar_dev);
 	strlcpy(driver->name, "diag", 4);
@@ -3904,8 +3774,7 @@ static int __init diagchar_init(void)
 	if (error)
 		goto fail;
 
-	DIAG_INFO("diagchar initialized now");/*++ 2015/07/14, USB Team, PCN00012 ++*/
-	platform_driver_register(&diag_mhi_driver);
+	pr_debug("diagchar initialized now");
 	return 0;
 
 fail:
@@ -3919,6 +3788,7 @@ fail:
 	diagfwd_cntl_exit();
 	diag_dci_exit();
 	diag_masks_exit();
+	diag_remote_exit();
 	return -1;
 }
 

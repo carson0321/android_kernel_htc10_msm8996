@@ -1157,7 +1157,6 @@ u8 build_rdo_from_source_caps(u8 obj_cnt, u8 *buf)
 	//TODO: currently not support Variable RDO
 	if ((pdo_h & (3 << 14)) != (PDO_TYPE_BATTERY >> 16)) {
 		usb_set_dwc_property(PROPERTY_CURRENT_MAX, (unsigned int)max_request_ma * 1000);
-#if 0 // pr_swap to sink fail when connecting to some port partner if we always send cap_mismatch
 		// if selected current is lower than 1000mA
 		// set mismatch bit and Maximum Operating Current is set to 2000mA
 		if (pdo_data.pd_list[sel_voltage_pdo_index][1] < 1000) {
@@ -1172,7 +1171,6 @@ u8 build_rdo_from_source_caps(u8 obj_cnt, u8 *buf)
 			return 1;
 		}
 		else {	// selected current is 1000mA+
-#endif
 			pdo_max = RDO_FIXED(sel_voltage_pdo_index + 1,
 								max_request_ma,
 								max_request_ma,
@@ -1180,12 +1178,9 @@ u8 build_rdo_from_source_caps(u8 obj_cnt, u8 *buf)
 			set_rdo_value(pdo_max & 0xff, (pdo_max >> 8) & 0xff,
 							(pdo_max >> 16) & 0xff,
 							(pdo_max >> 24) & 0xff);
-			//pr_info("FIXED PDO: selected current value >= 1000mA, send to PD charger\n");
-			pr_info("FIXED PDO, send to PD charger\n");
+			pr_info("FIXED PDO: selected current value >= 1000mA, send to PD charger\n");
 			return 1;
-#if 0
 		}
-#endif
 	}
 	else {	// Battery Request Data Object
 		usb_set_dwc_property(PROPERTY_CURRENT_MAX, MAX_REQUEST_CURRENT * 1000);

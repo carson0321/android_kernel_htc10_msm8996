@@ -881,7 +881,6 @@ struct ufs_hba {
 
 	enum bkops_status urgent_bkops_lvl;
 	bool is_urgent_bkops_lvl_checked;
-	unsigned int bkops_level;
 
 	struct rw_semaphore clk_scaling_lock;
 
@@ -889,9 +888,6 @@ struct ufs_hba {
 	bool no_ref_clk_gating;
 
 	int scsi_block_reqs_cnt;
-
-	int			latency_hist_enabled;
-	struct io_latency_state io_lat_s;
 };
 
 /* Returns true if clocks can be gated. Otherwise false */

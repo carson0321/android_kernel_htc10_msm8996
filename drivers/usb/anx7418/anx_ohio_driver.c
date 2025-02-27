@@ -37,7 +37,7 @@ extern int dwc3_pd_drswap(int new_role);
 extern int usb_get_dwc_property(int prop_type);
 extern bool is_pon_spare_reg_on(void);
 
-extern int usb_lock_host_speed;
+static const int usb_lock_host_speed = 1;
 int cable_connected = 0;
 int oc_enable = 0;
 static int create_sysfs_interfaces(struct device *dev);
@@ -143,12 +143,6 @@ int ohio_dual_role_get_property(struct dual_role_phy_instance *dual_role,
 			break;
 		case DUAL_ROLE_PROP_VCONN_SUPPLY:
 			*val = (unsigned int)ohio->vconn;
-			break;
-		case DUAL_ROLE_PROP_PARTNER_SUPPORTS_USB_PD:
-			if (downstream_pd_cap)
-				*val = DUAL_ROLE_PROP_PARTNER_SUPPORTS_USB_PD_YES;
-			else
-				*val = DUAL_ROLE_PROP_PARTNER_SUPPORTS_USB_PD_NO;
 			break;
 		default:
 			break;
@@ -1329,7 +1323,7 @@ void dfp_downgrade_usb20(void)
 	pr_debug("%s : ANALOG_CTRL_5 status: %x->%x\n", __func__, pre, reg);
 }
 
-extern int usb_lock_speed;
+static const int usb_lock_speed = 1;
 void ohio_main_process(void)
 {
 	//process main task as you wanted
@@ -1481,8 +1475,8 @@ void usb_downgrade_func(void)
 	// Workaround: Downgrade USB speed to USB2.0 in host mode
 	if (ohio_get_data_value(OHIO_PMODE) == MODE_DFP && usb_lock_host_speed)
 		dfp_downgrade_usb20();
-	//if (ohio_get_data_value(OHIO_PMODE) == MODE_UFP && usb_lock_speed)
-	//	ufp_switch_usb_speed(0);
+	if (ohio_get_data_value(OHIO_PMODE) == MODE_UFP && usb_lock_speed)
+		ufp_switch_usb_speed(0);
 }
 
 extern int qpnp_boost_status(u8 *value);
@@ -2428,13 +2422,12 @@ static void usb_typec_fw_update_deinit(struct usb_typec_fwu_notifier *notifier)
 	notifier = NULL;
 }
 
-enum dual_role_property ohio_properties[6] = {
+enum dual_role_property ohio_properties[5] = {
 	DUAL_ROLE_PROP_SUPPORTED_MODES,
 	DUAL_ROLE_PROP_MODE,
 	DUAL_ROLE_PROP_PR,
 	DUAL_ROLE_PROP_DR,
 	DUAL_ROLE_PROP_VCONN_SUPPLY,
-	DUAL_ROLE_PROP_PARTNER_SUPPORTS_USB_PD,
 };
 
 static const struct dual_role_phy_desc ohio_desc = {

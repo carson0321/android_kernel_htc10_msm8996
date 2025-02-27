@@ -95,80 +95,6 @@ static const char * const restart_levels[] = {
 	[RESET_SUBSYS_COUPLED] = "RELATED",
 };
 
-#if defined(CONFIG_HTC_DEBUG_SSR)
-/**
- * MSS restart reason feature (Non-block)
- */
-
-#define SUBSYS_NAME_MAX_LENGTH 40
-#define RD_BUF_SIZE			  256
-#define MODEM_ERRMSG_LIST_LEN 10
-
-struct msm_msr_info {
-	int valid;
-	struct timespec msr_time;
-	char modem_errmsg[RD_BUF_SIZE];
-};
-int msm_msr_index = 0;
-static struct msm_msr_info msr_info_list[MODEM_ERRMSG_LIST_LEN];
-
-static ssize_t subsystem_restart_reason_nonblock_show(struct kobject *kobj,
-		struct kobj_attribute *attr, char *buf)
-{
-
-	int i = 0;
-	char tmp[RD_BUF_SIZE+30];
-
-	for( i=0; i<MODEM_ERRMSG_LIST_LEN; i++ ) {
-		if( msr_info_list[i].valid != 0 ) {
-			//Copy errmsg to buf
-			snprintf(tmp, RD_BUF_SIZE+30, "%ld-%s|\n\r", msr_info_list[i].msr_time.tv_sec, msr_info_list[i].modem_errmsg);
-			strcat(buf, tmp);
-			memset(tmp, 0, RD_BUF_SIZE+30);
-		}
-		msr_info_list[i].valid = 0;
-		memset(msr_info_list[i].modem_errmsg, 0, RD_BUF_SIZE);
-	}
-	strcat(buf, "\n\r\0");
-
-	return strlen(buf);
-}
-
-void subsystem_restart_reason_nonblock_init(void)
-{
-	int i = 0;
-	msm_msr_index = 0;
-	for( i=0; i<MODEM_ERRMSG_LIST_LEN; i++ ) {
-		msr_info_list[i].valid = 0;
-		memset(msr_info_list[i].modem_errmsg, 0, RD_BUF_SIZE);
-	}
-}
-
-#define subsystem_restart_ro_attr(_name) \
-	static struct kobj_attribute _name##_attr = {  \
-		.attr   = {                             \
-			.name = __stringify(_name),     \
-			.mode = 0444,                   \
-		},                                      \
-		.show   = _name##_show,                 \
-		.store  = NULL,         \
-	}
-
-
-subsystem_restart_ro_attr(subsystem_restart_reason_nonblock);
-
-
-static struct attribute *g[] = {
-	&subsystem_restart_reason_nonblock_attr.attr,
-	NULL,
-};
-
-static struct attribute_group attr_group = {
-	.attrs = g,
-};
-
-#endif
-
 /**
  * struct subsys_tracking - track state of a subsystem or restart order
  * @p_state: private state of subsystem/order
@@ -223,7 +149,6 @@ struct restart_log {
  * @count: reference count of subsystem_get()/subsystem_put()
  * @id: ida
  * @restart_level: restart level (0 - panic, 1 - related, 2 - independent, etc.)
- * @keep_alive: whether keep alive during AP's panic
  * @restart_order: order of other devices this devices restarts with
  * @crash_count: number of times the device has crashed
  * @do_ramdump_on_put: ramdump on subsystem_put() if true
@@ -236,7 +161,6 @@ struct subsys_device {
 	struct work_struct work;
 	struct wakeup_source ssr_wlock;
 	char wlname[64];
-	char error_buf[64];
 	struct work_struct device_restart_work;
 	struct subsys_tracking track;
 
@@ -249,11 +173,6 @@ struct subsys_device {
 #if defined(CONFIG_HTC_FEATURES_SSR)
 	bool enable_ramdump;
 #endif
-#if defined(CONFIG_HTC_DEBUG_SSR)
-#define HTC_DEBUG_SSR_REASON_LEN 80
-	char restart_reason[HTC_DEBUG_SSR_REASON_LEN];
-#endif
-	bool keep_alive;
 	int crash_count;
 	struct subsys_soc_restart_order *restart_order;
 	bool do_ramdump_on_put;
@@ -356,16 +275,6 @@ static ssize_t firmware_name_store(struct device *dev,
 	return orig_count;
 }
 
-#if defined(CONFIG_HTC_DEBUG_SSR)
-void subsys_set_restart_reason(struct subsys_device *dev, const char* reason)
-{
-	if (!dev || !reason)
-		return;
-	snprintf(dev->restart_reason, sizeof(dev->restart_reason) - 1, "%s", reason);
-}
-EXPORT_SYMBOL(subsys_set_restart_reason);
-#endif /* CONFIG_HTC_DEBUG_SSR */
-
 static ssize_t system_debug_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
@@ -397,6 +306,32 @@ static ssize_t system_debug_store(struct device *dev,
 	else
 		return -EPERM;
 	return orig_count;
+}
+
+static ssize_t crashed_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	bool crashed = to_subsys(dev)->crashed;
+
+	if (crashed)
+		return snprintf(buf, PAGE_SIZE, "%s\n", "TRUE");
+	else
+		return snprintf(buf, PAGE_SIZE, "%s\n", "FALSE");
+}
+
+static ssize_t crashed_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct subsys_device *subsys = to_subsys(dev);
+	const char *p;
+
+	p = memchr(buf, '\n', count);
+	if (p)
+		count = p - buf;
+
+	if (!strncasecmp(buf, "FALSE", count)) {
+		subsys->crashed = false;
+		return count;
+	}
+	return -EPERM;
 }
 
 #if defined(CONFIG_HTC_FEATURES_SSR)
@@ -548,31 +483,6 @@ void subsys_config_restart_level(struct subsys_device *dev)
 }
 #endif
 
-static ssize_t keep_alive_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
-{
-	struct subsys_device *subsys = to_subsys(dev);
-
-	return snprintf(buf, PAGE_SIZE, "%d\n", subsys->keep_alive);
-}
-
-static ssize_t keep_alive_store(struct device *dev,
-				struct device_attribute *attr, const char *buf,
-				size_t count)
-{
-	struct subsys_device *subsys = to_subsys(dev);
-	unsigned long value;
-
-	if (kstrtoul(buf, 0, &value) != 0)
-		return -EINVAL;
-	if (value > 1)
-		return -EINVAL;
-
-	subsys->keep_alive = (bool)value;
-
-	return count;
-}
-
 int subsys_get_restart_level(struct subsys_device *dev)
 {
 	return dev->restart_level;
@@ -592,12 +502,6 @@ static void subsys_set_state(struct subsys_device *subsys,
 		return;
 	}
 	spin_unlock_irqrestore(&subsys->track.s_lock, flags);
-}
-
-static ssize_t error_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
-{
-	return snprintf(buf, PAGE_SIZE, "%s\n", to_subsys(dev)->error_buf);
 }
 
 /**
@@ -621,11 +525,10 @@ static struct device_attribute subsys_attrs[] = {
 #if defined(CONFIG_HTC_FEATURES_SSR)
 	__ATTR(enable_ramdump, 0644, enable_ramdump_show, enable_ramdump_store),
 #endif
-	__ATTR_RO(error),
+	__ATTR(crashed, 0644, crashed_show, crashed_store),
 	__ATTR(restart_level, 0644, restart_level_show, restart_level_store),
 	__ATTR(firmware_name, 0644, firmware_name_show, firmware_name_store),
 	__ATTR(system_debug, 0644, system_debug_show, system_debug_store),
-	__ATTR(keep_alive, 0644, keep_alive_show, keep_alive_store),
 	__ATTR_NULL,
 };
 
@@ -765,19 +668,15 @@ static void send_sysmon_notif(struct subsys_device *dev)
 	mutex_unlock(&subsys_list_lock);
 }
 
-static int for_each_subsys_device(struct subsys_device **list, unsigned count,
-		void *data, int (*fn)(struct subsys_device *, void *))
+static void for_each_subsys_device(struct subsys_device **list, unsigned count,
+		void *data, void (*fn)(struct subsys_device *, void *))
 {
-	int ret;
 	while (count--) {
 		struct subsys_device *dev = *list++;
 		if (!dev)
 			continue;
-		ret = fn(dev, data);
-		if (ret)
-			return ret;
+		fn(dev, data);
 	}
-	return 0;
 }
 
 static void notify_each_subsys_device(struct subsys_device **list,
@@ -895,31 +794,21 @@ static int wait_for_err_ready(struct subsys_device *subsys)
 	return 0;
 }
 
-static int subsystem_shutdown(struct subsys_device *dev, void *data)
+static void subsystem_shutdown(struct subsys_device *dev, void *data)
 {
 	const char *name = dev->desc->name;
-	int ret;
 
 	pr_info("[%s:%d]: Shutting down %s\n",
 			current->comm, current->pid, name);
-	ret = dev->desc->shutdown(dev->desc, true);
-	if (ret < 0) {
-		if (!dev->desc->ignore_ssr_failure)
-			panic("subsys-restart: [%s:%d]: Failed to shutdown %s!",
+	if (dev->desc->shutdown(dev->desc, true) < 0)
+		panic("subsys-restart: [%s:%d]: Failed to shutdown %s!",
 			current->comm, current->pid, name);
-		else {
-			pr_err("Shutdown failure on %s\n", name);
-			return ret;
-		}
-	}
 	dev->crash_count++;
 	subsys_set_state(dev, SUBSYS_OFFLINE);
 	disable_all_irqs(dev);
-
-	return 0;
 }
 
-static int subsystem_ramdump(struct subsys_device *dev, void *data)
+static void subsystem_ramdump(struct subsys_device *dev, void *data)
 {
 	const char *name = dev->desc->name;
 
@@ -928,17 +817,15 @@ static int subsystem_ramdump(struct subsys_device *dev, void *data)
 			pr_warn("%s[%s:%d]: Ramdump failed.\n",
 				name, current->comm, current->pid);
 	dev->do_ramdump_on_put = false;
-	return 0;
 }
 
-static int subsystem_free_memory(struct subsys_device *dev, void *data)
+static void subsystem_free_memory(struct subsys_device *dev, void *data)
 {
 	if (dev->desc->free_memory)
 		dev->desc->free_memory(dev->desc);
-	return 0;
 }
 
-static int subsystem_powerup(struct subsys_device *dev, void *data)
+static void subsystem_powerup(struct subsys_device *dev, void *data)
 {
 	const char *name = dev->desc->name;
 	int ret;
@@ -946,17 +833,11 @@ static int subsystem_powerup(struct subsys_device *dev, void *data)
 	pr_info("[%s:%d]: Powering up %s\n", current->comm, current->pid, name);
 	init_completion(&dev->err_ready);
 
-	ret = dev->desc->powerup(dev->desc);
-	if (ret < 0) {
+	if (dev->desc->powerup(dev->desc) < 0) {
 		notify_each_subsys_device(&dev, 1, SUBSYS_POWERUP_FAILURE,
 								NULL);
-		if (!dev->desc->ignore_ssr_failure)
-			panic("[%s:%d]: Powerup error: %s!",
-				current->comm, current->pid, name);
-		else {
-			pr_err("Powerup failure on %s\n", name);
-			return ret;
-		}
+		panic("[%s:%d]: Powerup error: %s!",
+			current->comm, current->pid, name);
 	}
 	enable_all_irqs(dev);
 
@@ -964,16 +845,11 @@ static int subsystem_powerup(struct subsys_device *dev, void *data)
 	if (ret) {
 		notify_each_subsys_device(&dev, 1, SUBSYS_POWERUP_FAILURE,
 								NULL);
-		if (!dev->desc->ignore_ssr_failure)
-			panic("[%s:%d]: Timed out waiting for error ready: %s!",
-				current->comm, current->pid, name);
-		else
-			return ret;
+		panic("[%s:%d]: Timed out waiting for error ready: %s!",
+			current->comm, current->pid, name);
 	}
 	subsys_set_state(dev, SUBSYS_ONLINE);
 	subsys_set_crash_status(dev, false);
-
-	return 0;
 }
 
 static int __find_subsys(struct device *dev, void *data)
@@ -1213,7 +1089,6 @@ static void subsystem_restart_wq_func(struct work_struct *work)
 	struct subsys_tracking *track;
 	unsigned count;
 	unsigned long flags;
-	int ret;
 
 	/*
 	 * It's OK to not take the registration lock at this point.
@@ -1261,9 +1136,7 @@ static void subsystem_restart_wq_func(struct work_struct *work)
 	pr_debug("[%s:%d]: Starting restart sequence for %s\n",
 			current->comm, current->pid, desc->name);
 	notify_each_subsys_device(list, count, SUBSYS_BEFORE_SHUTDOWN, NULL);
-	ret = for_each_subsys_device(list, count, NULL, subsystem_shutdown);
-	if (ret)
-		goto err;
+	for_each_subsys_device(list, count, NULL, subsystem_shutdown);
 	notify_each_subsys_device(list, count, SUBSYS_AFTER_SHUTDOWN, NULL);
 
 	notify_each_subsys_device(list, count, SUBSYS_RAMDUMP_NOTIFICATION,
@@ -1279,18 +1152,11 @@ static void subsystem_restart_wq_func(struct work_struct *work)
 	for_each_subsys_device(list, count, NULL, subsystem_free_memory);
 
 	notify_each_subsys_device(list, count, SUBSYS_BEFORE_POWERUP, NULL);
-	ret = for_each_subsys_device(list, count, NULL, subsystem_powerup);
-	if (ret)
-		goto err;
+	for_each_subsys_device(list, count, NULL, subsystem_powerup);
 	notify_each_subsys_device(list, count, SUBSYS_AFTER_POWERUP, NULL);
 
 	pr_info("[%s:%d]: Restart sequence for %s completed.\n",
 			current->comm, current->pid, desc->name);
-
-err:
-	/* Reset subsys count */
-	if (ret)
-		dev->count = 0;
 
 	mutex_unlock(&soc_order_reg_lock);
 	mutex_unlock(&track->lock);
@@ -1307,20 +1173,6 @@ static void __subsystem_restart_dev(struct subsys_device *dev)
 	const char *name = dev->desc->name;
 	struct subsys_tracking *track;
 	unsigned long flags;
-
-#if defined(CONFIG_HTC_DEBUG_SSR)
-		/*+SSD-RIL for nonblock restart reason	*/
-		if (!strncmp(name, "modem",
-					SUBSYS_NAME_MAX_LENGTH)) {
-		  msr_info_list[msm_msr_index].valid = 1;
-		  msr_info_list[msm_msr_index].msr_time = current_kernel_time();
-		  snprintf(msr_info_list[msm_msr_index].modem_errmsg, RD_BUF_SIZE, "%s", dev->restart_reason);
-
-		  if(++msm_msr_index >= MODEM_ERRMSG_LIST_LEN)
-		    msm_msr_index = 0;
-		}
-	   /*-SSD-RIL for nonblock restart reason	*/
-#endif
 
 	pr_info("Restarting %s [level=%s]!\n", desc->name,
 			restart_levels[dev->restart_level]);
@@ -1358,13 +1210,8 @@ static void device_restart_work_hdlr(struct work_struct *work)
 	 */
 	msleep(100);
 
-#if defined(CONFIG_HTC_DEBUG_SSR)
-        panic("SSR: %s crashed. %s", dev->desc->name, dev->restart_reason);
-#else
-
 	panic("subsys-restart: Resetting the SoC - %s crashed.",
 							dev->desc->name);
-#endif
 }
 
 int subsystem_restart_dev(struct subsys_device *dev)
@@ -1470,15 +1317,6 @@ void subsys_set_crash_status(struct subsys_device *dev, bool crashed)
 bool subsys_get_crash_status(struct subsys_device *dev)
 {
 	return dev->crashed;
-}
-
-void subsys_set_error(struct subsys_device *dev, const char *error_msg)
-{
-	if (dev) {
-		snprintf(dev->error_buf, sizeof(dev->error_buf), "%s",
-							   error_msg);
-		sysfs_notify(&dev->dev.kobj, NULL, "error");
-	}
 }
 
 static struct subsys_device *desc_to_subsys(struct device *d)
@@ -1821,9 +1659,6 @@ static int subsys_parse_devicetree(struct subsys_desc *desc)
 			desc->generic_irq = ret;
 	}
 
-	desc->ignore_ssr_failure = of_property_read_bool(pdev->dev.of_node,
-						"qcom,ignore-ssr-failure");
-
 	order = ssr_parse_restart_orders(desc);
 	if (IS_ERR(order)) {
 		pr_err("Could not initialize SSR restart order, err = %ld\n",
@@ -1961,10 +1796,6 @@ struct subsys_device *subsys_register(struct subsys_desc *desc)
 
 	subsys->notify = subsys_notif_add_subsys(desc->name);
 
-#if defined(CONFIG_HTC_DEBUG_SSR)
-	memset(subsys->restart_reason, 0, sizeof(subsys->restart_reason));
-#endif
-
 	snprintf(subsys->wlname, sizeof(subsys->wlname), "ssr(%s)", desc->name);
 	wakeup_source_init(&subsys->ssr_wlock, subsys->wlname);
 	INIT_WORK(&subsys->work, subsystem_restart_wq_func);
@@ -2090,12 +1921,6 @@ static int subsys_panic(struct device *dev, void *data)
 {
 	struct subsys_device *subsys = to_subsys(dev);
 
-	/* Keeping the subsys alive during panic */
-	if (!panic_timeout && subsys->keep_alive) {
-		dev_warn(dev, "keeping %s alive\n", subsys->desc->name);
-		return 0;
-	}
-
 	if (subsys->desc->crash_shutdown)
 		subsys->desc->crash_shutdown(subsys->desc);
 	return 0;
@@ -2115,20 +1940,6 @@ static struct notifier_block panic_nb = {
 static int __init subsys_restart_init(void)
 {
 	int ret;
-#if defined(CONFIG_HTC_DEBUG_SSR)
-		struct kobject *properties_kobj;
-		/*+SSD-RIL for nonblock restart reason	*/
-		subsystem_restart_reason_nonblock_init();
-		properties_kobj = kobject_create_and_add("subsystem_restart_properties", NULL);
-		if (properties_kobj) {
-			ret = sysfs_create_group(properties_kobj, &attr_group);
-			if (ret) {
-				pr_err("subsys_restart_init: sysfs_create_group failed\n");
-				return ret;
-			}
-		}
-		/*-SSD-RIL for nonblock restart reason	*/
-#endif
 	ssr_wq = alloc_workqueue("ssr_wq", WQ_CPU_INTENSIVE, 0);
 	BUG_ON(!ssr_wq);
 

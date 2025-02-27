@@ -1465,7 +1465,6 @@ extern uint8 *wl_get_up_table(void);
 #if defined(CUSTOMER_HW_ONE)
 #if defined(WL_VENDOR_EXT_SUPPORT)
 extern int wl_cfg80211_send_priv_event(struct net_device *dev, char *event);
-extern void htc_send_hotspot_event(struct net_device *ndev, char *event);
 #endif /* WL_VENDOR_EXT_SUPPORT */
 #if defined(SUPPORT_2G_HT40)
 void wl_cfg80211_set_hotspot_bw(int bandwidth);

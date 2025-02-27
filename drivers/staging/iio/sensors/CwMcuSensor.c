@@ -117,7 +117,6 @@
 #define ENABLE_LIST_GROUP_NUM 4
 #define REACTIVATE_PERIOD (10*HZ)
 #define RESET_PERIOD (30*HZ)
-#define MUTEX_LOCK_TIMEOUT (5*HZ)
 #define SYNC_ACK_MAGIC  0x66
 #define EXHAUSTED_MAGIC 0x77
 
@@ -434,24 +433,6 @@ static int mcu_dload_i2c_read(u8 cmd, u8 *data, u8 len);
 static int mcu_dload_dump_backup_registers(void);
 static int mcu_dload_dump_exception_buffer(struct cwmcu_data *mcu_data);
 
-static int get_lock(struct mutex *m, unsigned long time_out_jiff)
-{
-	unsigned long cur_jiff = jiffies;
-
-	while (time_after(cur_jiff + time_out_jiff, jiffies)) {
-		/* Try to acquire the mutex atomically. Returns 1 if the mutex
-		 * has been acquired successfully, and 0 on contention. */
-		if (mutex_trylock(m) == 1)
-			return 0;
-		msleep(200);
-	}
-
-	E("%s[%d]: get lock timed out\n", __func__, __LINE__);
-	dump_stack();
-
-	return -1;
-}
-
 static inline int MCU2CPU_STATUS_GPIO_LEVEL(struct cwmcu_data *mcu_data)
 {
     if ((MCU_IN_BOOTLOADER()) || (gpio_get_value_cansleep(mcu_data->gpio_reset) == 0)) {
@@ -586,11 +567,7 @@ static void mcu_state_enter_dload(struct cwmcu_data *mcu_data)
         ret = mcu_set_reboot_state(MCU_SYS_STATUS_SHUB);
         if (ret >= 0) {
             if (mcu_data) {
-                ret = get_lock(&s_activated_i2c_lock, MUTEX_LOCK_TIMEOUT);
-                if (ret != 0) {
-                        E("%s[%d]: Wait timed out\n", __func__, __LINE__);
-                        return ;
-                }
+                mutex_lock(&s_activated_i2c_lock);
                 reset_hub(mcu_data, true);
                 mutex_unlock(&s_activated_i2c_lock);
             }
@@ -617,11 +594,7 @@ static void mcu_state_enter_dload(struct cwmcu_data *mcu_data)
     getnstimeofday(&ts);
     rtc_time_to_tm(ts.tv_sec, &tm);
 
-    ret = get_lock(&s_activated_i2c_lock, MUTEX_LOCK_TIMEOUT);
-        if (ret != 0) {
-            E("%s[%d]: Wait timed out\n", __func__, __LINE__);
-            return ;
-        }
+    mutex_lock(&s_activated_i2c_lock);
     reinit_completion(&s_mcu_enter_shub_run);
     s_mcu_state = MCU_STATE_DLOAD;
     mutex_unlock(&s_activated_i2c_lock);
@@ -2390,13 +2363,8 @@ static int CWMCU_i2c_write(struct cwmcu_data *mcu_data,
 
 	if (atomic_read(&mcu_data->suspended))
 		return len;
-	if(mutex_lock_i2c) {
-		write_res = get_lock(&s_activated_i2c_lock, MUTEX_LOCK_TIMEOUT);
-		if (write_res != 0) {
-			E("%s[%d]: Wait timed out\n", __func__, __LINE__);
-			return len;
-		}
-	}
+	if(mutex_lock_i2c)
+		mutex_lock(&s_activated_i2c_lock);
 	if (retry_exhausted(mcu_data)) {
 		if(mutex_lock_i2c)
 			mutex_unlock(&s_activated_i2c_lock);
@@ -2488,11 +2456,7 @@ static int CWMCU_i2c_write_block(struct cwmcu_data *mcu_data,
 	if (atomic_read(&mcu_data->suspended))
 		return len;
 
-	write_res = get_lock(&s_activated_i2c_lock, MUTEX_LOCK_TIMEOUT);
-	if (write_res != 0) {
-		E("%s[%d]: Wait timed out\n", __func__, __LINE__);
-		return write_res;
-	}
+	mutex_lock(&s_activated_i2c_lock);
 	if (retry_exhausted(mcu_data)) {
 		mutex_unlock(&s_activated_i2c_lock);
 		D("i2c_w_blk: total_retry = %d, latch_retry = %d\n",
@@ -3081,12 +3045,7 @@ static int CWMCU_i2c_read(struct cwmcu_data *mcu_data,
 	if (atomic_read(&mcu_data->suspended))
 		return len;
 
-	rc = get_lock(&s_activated_i2c_lock, MUTEX_LOCK_TIMEOUT);
-	if (rc != 0) {
-		E("%s[%d]: Wait timed out\n", __func__, __LINE__);
-		return len;
-	}
-
+	mutex_lock(&s_activated_i2c_lock);
 	if (retry_exhausted(mcu_data)) {
 		memset(u8_data, 0, len); /* Assign data to 0 when chip NACK */
 
@@ -3777,7 +3736,7 @@ static ssize_t active_set(struct device *dev, struct device_attribute *attr,
 
 	atomic_set(&mcu_data->critical_sect, 0);
 
-	I("ate_set: snr_id = %ld, en = %ld, en_lst = 0x%llx, v03-get_lock low cpu\n",
+	I("ate_set: snr_id = %ld, en = %ld, en_lst = 0x%llx\n",
 	  sensors_id, enabled, mcu_data->enabled_list);
 
 	return count;
@@ -3961,11 +3920,6 @@ static ssize_t batch_set(struct device *dev,
 		}
 	}
 	kfree(str_buf);
-
-	if ((sensors_id < 0) || (sensors_id >= num_sensors)) {
-		D("%s: Invalid sensors_id = %d\n", __func__, sensors_id);
-		return -EINVAL;
-	}
 
 	D("%s: sensors_id = 0x%x, flag = %d, delay_ms = %d, timeout = %lld\n",
 	  __func__, sensors_id, flag, delay_ms, timeout);
@@ -5166,11 +5120,7 @@ static irqreturn_t cwmcu_irq_handler(int irq, void *handle)
 
 		E("[CWMCU] MCU_EXCEPTION \n");
 
-		ret = get_lock(&s_activated_i2c_lock, MUTEX_LOCK_TIMEOUT);
-		if (ret != 0) {
-			E("%s[%d]: Wait timed out\n", __func__, __LINE__);
-			return IRQ_HANDLED;
-		}
+		mutex_lock(&s_activated_i2c_lock);
 		reset_done = reset_hub(mcu_data, false);
 		mutex_unlock(&s_activated_i2c_lock);
 
@@ -6250,19 +6200,13 @@ static void cwmcu_one_shot(struct work_struct *work)
 	struct cwmcu_data *mcu_data = container_of((struct work_struct *)work,
 			struct cwmcu_data, one_shot_work);
 	u8 clear_intr;
-	int ret;
-
 	D("w_activated_i2c is %d,w_re_init is %d, w_kick_start_mcu is %d, w_mcu_state_change is %d, w_flush_fifo is %d, w_clear_fifo is %d , w_hall_inform_mcu is %d, w_batch_read is %d\n",
 	mcu_data->w_activated_i2c,mcu_data->w_re_init,mcu_data->w_kick_start_mcu,mcu_data->w_mcu_state_change,mcu_data->w_flush_fifo,mcu_data->w_clear_fifo,mcu_data->w_hall_inform_mcu,mcu_data->w_batch_read);
 
 	if (mcu_data->w_activated_i2c == true) {
 		mcu_data->w_activated_i2c = false;
 
-		ret = get_lock(&s_activated_i2c_lock, MUTEX_LOCK_TIMEOUT);
-		if (ret != 0) {
-			E("%s[%d]: Wait timed out\n", __func__, __LINE__);
-			return ;
-		}
+		mutex_lock(&s_activated_i2c_lock);
 		if (retry_exhausted(mcu_data) &&
 		    time_after(jiffies, mcu_data->i2c_jiffies +
 					REACTIVATE_PERIOD)) {
@@ -6329,11 +6273,7 @@ static void cwmcu_one_shot(struct work_struct *work)
 
 	if (mcu_data->w_kick_start_mcu == true) {
 		mcu_data->w_kick_start_mcu = false;
-		ret = get_lock(&s_activated_i2c_lock, MUTEX_LOCK_TIMEOUT);
-		if (ret != 0) {
-			E("%s[%d]: Wait timed out\n", __func__, __LINE__);
-			return ;
-		}
+		mutex_lock(&s_activated_i2c_lock);
 		reset_hub(mcu_data, true);
 		mutex_unlock(&s_activated_i2c_lock);
 
@@ -6457,11 +6397,7 @@ static int mcu_i2c_rx(const struct cwmcu_bus_client *client, u8 *buf, int len)
 
     if (!client) return -ENXIO;
 
-    ret = get_lock(&s_activated_i2c_lock, MUTEX_LOCK_TIMEOUT);
-    if (ret != 0) {
-        E("%s[%d]: Wait timed out\n", __func__, __LINE__);
-        return -ENXIO;
-    }
+    mutex_lock(&s_activated_i2c_lock);
 
     for (i = 0; i < RETRY_TIMES; i++) {
         D("%s(%d) len:%d\n", __func__, __LINE__, len);
@@ -6491,11 +6427,7 @@ static int mcu_i2c_tx(const struct cwmcu_bus_client *client, u8 *buf, int len)
 
     if (!client) return -ENXIO;
 
-    ret = get_lock(&s_activated_i2c_lock, MUTEX_LOCK_TIMEOUT);
-    if (ret != 0) {
-        E("%s[%d]: Wait timed out\n", __func__, __LINE__);
-        return -ENXIO;
-    }
+    mutex_lock(&s_activated_i2c_lock);
 
     for (i = 0; i < RETRY_TIMES; i++) {
         D("%s(%d) len:%d\n", __func__, __LINE__, len);
@@ -7073,14 +7005,8 @@ static int mcu_bl_erase_htc_param(void)
 
 static void mcu_bl_enter_leave(uint8_t enter)
 {
-    int ret;
-
     //enter mcu bootloader mode
-    ret = get_lock(&s_activated_i2c_lock, MUTEX_LOCK_TIMEOUT);
-    if (ret != 0) {
-        E("%s[%d]: Wait timed out\n", __func__, __LINE__);
-        return;
-    }
+    mutex_lock(&s_activated_i2c_lock);
 
     //pull boot pin
     if (enter) {
@@ -8544,11 +8470,7 @@ static long shub_dload_ioctl(struct file *file, unsigned int cmd, unsigned long 
                 I("shub_dl_io(%d): reset mcu to SHUB state\n", __LINE__);
                 mcu_set_reboot_state(MCU_SYS_STATUS_SHUB);
                 if (s_mcu_data) {
-                    ret = get_lock(&s_activated_i2c_lock, MUTEX_LOCK_TIMEOUT);
-                    if (ret != 0) {
-                        E("%s[%d]: Wait timed out\n", __func__, __LINE__);
-                        return ret;
-                    }
+                    mutex_lock(&s_activated_i2c_lock);
                     reset_hub(s_mcu_data, true);
                     mutex_unlock(&s_activated_i2c_lock);
                 }

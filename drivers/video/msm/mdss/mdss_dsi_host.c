@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -294,16 +294,6 @@ void mdss_dsi_read_phy_revision(struct mdss_dsi_ctrl_pdata *ctrl)
 		return;
 
 	reg_val = MIPI_INP(ctrl->phy_io.base);
-	if (!reg_val) {
-		/*
-		 * DSI_0_PHY_DSIPHY_REVISION_ID3 for phy 1.0
-		 * reset value = 0x10
-		 * 7:4 Major
-		 * 3:0 Minor
-		 */
-		reg_val = MIPI_INP(ctrl->phy_io.base + 0x20c);
-		reg_val = reg_val >> 4;
-	}
 
 	if (reg_val == DSI_PHY_REV_20)
 		ctrl->shared_data->phy_rev = DSI_PHY_REV_20;
@@ -1120,7 +1110,7 @@ static int mdss_dsi_read_status(struct mdss_dsi_ctrl_pdata *ctrl)
 		memset(&cmdreq, 0, sizeof(cmdreq));
 		cmdreq.cmds = ctrl->status_cmds.cmds + i;
 		cmdreq.cmds_cnt = 1;
-		cmdreq.flags = CMD_REQ_COMMIT | CMD_REQ_RX;
+		cmdreq.flags = CMD_REQ_COMMIT | CMD_CLK_CTRL | CMD_REQ_RX;
 		cmdreq.rlen = ctrl->status_cmds_rlen[i];
 		cmdreq.cb = NULL;
 		cmdreq.rbuf = ctrl->status_buf.data;
@@ -2482,12 +2472,23 @@ void mdss_dsi_cmd_mdp_busy(struct mdss_dsi_ctrl_pdata *ctrl)
 		if (!ctrl->mdp_busy)
 			rc = 1;
 		spin_unlock_irqrestore(&ctrl->mdp_lock, flags);
-		if (!rc && mdss_dsi_mdp_busy_tout_check(ctrl)) {
-			u32 status;
-			struct mdss_data_type *mdata = mdss_mdp_get_mdata();
+		if (!rc) {
+			if (mdss_dsi_mdp_busy_tout_check(ctrl)) {
+				u32 status;
+				struct mdss_data_type *mdata = mdss_mdp_get_mdata();
 
-			status = readl_relaxed(mdata->mdp_base + MDSS_REG_HW_INTR2_STATUS);
-			pr_err("%s: timeout error, TE ISR status=0x%x\n", __func__, status);
+				status = readl_relaxed(mdata->mdp_base + MDSS_REG_HW_INTR2_STATUS);
+				pr_err("%s: timeout error, TE ISR status=0x%x\n", __func__, status);
+				if (status & 0x1100000) {
+					MDSS_XLOG_TOUT_HANDLER("mdp", "dsi0_ctrl",
+						"dsi0_phy", "dsi1_ctrl", "dsi1_phy",
+						"vbif", "vbif_nrt", "dbg_bus",
+						"vbif_dbg_bus", "panic");
+				} else {
+					MDSS_XLOG_TOUT_HANDLER("mdp", "dsi0_ctrl",
+						"dsi0_phy", "dsi1_ctrl", "dsi1_phy");
+				}
+			}
 		}
 	}
 	pr_debug("%s: done pid=%d\n", __func__, current->pid);

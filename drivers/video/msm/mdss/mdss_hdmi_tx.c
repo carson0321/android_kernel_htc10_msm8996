@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -105,7 +105,6 @@ static int hdmi_tx_set_mhl_hpd(struct platform_device *pdev, uint8_t on);
 static int hdmi_tx_sysfs_enable_hpd(struct hdmi_tx_ctrl *hdmi_ctrl, int on);
 static irqreturn_t hdmi_tx_isr(int irq, void *data);
 static void hdmi_tx_hpd_off(struct hdmi_tx_ctrl *hdmi_ctrl);
-static int hdmi_tx_hpd_on(struct hdmi_tx_ctrl *hdmi_ctrl);
 static int hdmi_tx_enable_power(struct hdmi_tx_ctrl *hdmi_ctrl,
 	enum hdmi_tx_power_module_type module, int enable);
 static int hdmi_tx_setup_tmds_clk_rate(struct hdmi_tx_ctrl *hdmi_ctrl);
@@ -318,12 +317,8 @@ static void hdmi_tx_audio_setup(struct hdmi_tx_ctrl *hdmi_ctrl)
 
 static inline u32 hdmi_tx_is_dvi_mode(struct hdmi_tx_ctrl *hdmi_ctrl)
 {
-	bool is_dvi = hdmi_edid_get_sink_mode(
-		hdmi_tx_get_fd(HDMI_TX_FEAT_EDID)) ? false : true;
-	bool audio_supp = hdmi_edid_is_audio_supported(hdmi_tx_get_fd(HDMI_TX_FEAT_EDID)) ? true : false;
-
-	/* If sink was claim as DVI mode with AUDIO support, assume it was incorrect and it should be HDMI. */
-	return !audio_supp && is_dvi;
+	return hdmi_edid_get_sink_mode(
+		hdmi_tx_get_fd(HDMI_TX_FEAT_EDID)) ? 0 : 1;
 } /* hdmi_tx_is_dvi_mode */
 
 static inline bool hdmi_tx_is_panel_on(struct hdmi_tx_ctrl *hdmi_ctrl)
@@ -547,8 +542,7 @@ static ssize_t hdmi_tx_sysfs_wta_edid(struct device *dev,
 	}
 
 	mutex_lock(&hdmi_ctrl->tx_lock);
-	if ((edid_size < EDID_BLOCK_SIZE) ||
-		(edid_size > hdmi_ctrl->edid_buf_size)) {
+	if (edid_size < EDID_BLOCK_SIZE) {
 		DEV_DBG("%s: disabling custom edid\n", __func__);
 
 		ret = -EINVAL;
@@ -600,11 +594,6 @@ static ssize_t hdmi_tx_sysfs_rda_edid(struct device *dev,
 
 	mutex_lock(&hdmi_ctrl->tx_lock);
 	cea_blks = hdmi_ctrl->edid_buf[EDID_BLOCK_SIZE - 2];
-	if (cea_blks >= MAX_EDID_BLOCKS) {
-		DEV_ERR("%s: invalid cea blocks\n", __func__);
-		mutex_unlock(&hdmi_ctrl->tx_lock);
-		return -EINVAL;
-	}
 	size = (cea_blks + 1) * EDID_BLOCK_SIZE;
 	size = min_t(u32, size, PAGE_SIZE);
 
@@ -674,9 +663,6 @@ static int hdmi_tx_update_pixel_clk(struct hdmi_tx_ctrl *hdmi_ctrl)
 	}
 
 	power_data->clk_config->rate = pinfo->clk_rate;
-
-	if (pinfo->out_format == MDP_Y_CBCR_H2V2)
-		power_data->clk_config->rate /= 2;
 
 	DEV_DBG("%s: rate %ld\n", __func__, power_data->clk_config->rate);
 
@@ -1456,9 +1442,6 @@ static void hdmi_tx_hdcp_cb_work(struct work_struct *work)
 		DEV_DBG("%s: invalid input\n", __func__);
 		return;
 	}
-
-	DEV_INFO("%s: HDCP status=%s hpd_state=%d\n", __func__,
-		hdcp_state_name(hdmi_ctrl->hdcp_status), hdmi_ctrl->hpd_state);
 
 	mutex_lock(&hdmi_ctrl->tx_lock);
 
@@ -2251,7 +2234,7 @@ static void hdmi_tx_set_mode(struct hdmi_tx_ctrl *hdmi_ctrl, u32 power_on)
 			reg_val |= BIT(2);
 
 		/* Set transmission mode to DVI based in EDID info */
-		if (hdmi_tx_is_dvi_mode(hdmi_ctrl))
+		if (!hdmi_edid_get_sink_mode(hdmi_tx_get_fd(HDMI_TX_FEAT_EDID)))
 			reg_val &= ~BIT(1); /* DVI mode */
 
 		/*
@@ -2264,7 +2247,7 @@ static void hdmi_tx_set_mode(struct hdmi_tx_ctrl *hdmi_ctrl, u32 power_on)
 
 	DSS_REG_W(io, HDMI_CTRL, reg_val);
 
-	DEV_INFO("HDMI Core: %s, HDMI_CTRL=0x%08x\n",
+	DEV_DBG("HDMI Core: %s, HDMI_CTRL=0x%08x\n",
 		power_on ? "Enable" : "Disable", reg_val);
 } /* hdmi_tx_set_mode */
 
@@ -3016,8 +2999,7 @@ static int hdmi_tx_power_off(struct hdmi_tx_ctrl *hdmi_ctrl)
 
 	hdmi_ctrl->panel_power_on = false;
 
-	if (hdmi_ctrl->hpd_off_pending || hdmi_ctrl->panel_suspend ||
-		!hdmi_ctrl->pdata.pluggable)
+	if (hdmi_ctrl->hpd_off_pending || hdmi_ctrl->panel_suspend)
 		hdmi_tx_hpd_off(hdmi_ctrl);
 
 	if (hdmi_ctrl->hdmi_tx_hpd_done)
@@ -3036,16 +3018,12 @@ static int hdmi_tx_power_on(struct hdmi_tx_ctrl *hdmi_ctrl)
 	void *pdata = hdmi_tx_get_fd(HDMI_TX_FEAT_PANEL);
 	void *edata = hdmi_tx_get_fd(HDMI_TX_FEAT_EDID);
 
-	if (!hdmi_ctrl->pdata.pluggable)
-		hdmi_tx_hpd_on(hdmi_ctrl);
-
 	ret = hdmi_tx_check_clk_state(hdmi_ctrl, HDMI_TX_HPD_PM);
 	if (ret) {
 		DEV_ERR("%s: clocks not on\n", __func__);
 		return -EINVAL;
 	}
 
-	hdmi_ctrl->hdcp_feature_on = hdcp_feature_on;
 	if (hdmi_ctrl->ds_registered && !hdmi_ctrl->ds_hdcp)
 		hdmi_ctrl->hdcp_feature_on = false;
 
@@ -3106,7 +3084,7 @@ static int hdmi_tx_power_on(struct hdmi_tx_ctrl *hdmi_ctrl)
 	if (hdmi_ctrl->hdmi_tx_hpd_done)
 		hdmi_ctrl->hdmi_tx_hpd_done(hdmi_ctrl->downstream_data);
 
-	DEV_INFO("%s: hdmi_ctrl core on\n", __func__);
+	DEV_DBG("%s: hdmi_ctrl core on\n", __func__);
 	return 0;
 }
 
@@ -3138,9 +3116,8 @@ static void hdmi_tx_hpd_off(struct hdmi_tx_ctrl *hdmi_ctrl)
 	/* Turn off HPD interrupts */
 	DSS_REG_W(io, HDMI_HPD_INT_CTRL, 0);
 
-	/* non pluggable display should not enable wakeup interrupt */
-	if ((hdmi_tx_is_cec_wakeup_en(hdmi_ctrl) &&
-			hdmi_ctrl->pdata.pluggable)) {
+
+	if (hdmi_tx_is_cec_wakeup_en(hdmi_ctrl)) {
 		hdmi_ctrl->mdss_util->enable_wake_irq(&hdmi_tx_hw);
 	} else {
 		hdmi_ctrl->mdss_util->disable_irq(&hdmi_tx_hw);
@@ -3235,6 +3212,7 @@ static int hdmi_tx_sysfs_enable_hpd(struct hdmi_tx_ctrl *hdmi_ctrl, int on)
 	DEV_INFO("%s: on=%d, sdev=%d\n", __func__, on, hdmi_ctrl->sdev.state);
 	if (on) {
 		hdmi_ctrl->hpd_off_pending = false;
+
 		rc = hdmi_tx_hpd_on(hdmi_ctrl);
 	} else {
 		if (!hdmi_ctrl->panel_power_on)
@@ -3587,9 +3565,6 @@ static void hdmi_tx_update_fps(struct hdmi_tx_ctrl *hdmi_ctrl)
 		return;
 	}
 
-	DEV_DBG("%s: current fps %d, new fps %d\n", __func__,
-		pinfo->current_fps, hdmi_ctrl->dynamic_fps);
-
 	if (hdmi_ctrl->dynamic_fps == pinfo->current_fps) {
 		DEV_DBG("%s: Panel is already at this FPS: %d\n",
 			__func__, hdmi_ctrl->dynamic_fps);
@@ -3784,11 +3759,10 @@ static int hdmi_tx_evt_handle_panel_on(struct hdmi_tx_ctrl *hdmi_ctrl)
 
 static int hdmi_tx_evt_handle_suspend(struct hdmi_tx_ctrl *hdmi_ctrl)
 {
-	if ((!hdmi_ctrl->hpd_feature_on) || (hdmi_ctrl->panel_suspend == true))
+	if (!hdmi_ctrl->hpd_feature_on)
 		goto end;
 
-	if ((!hdmi_ctrl->hpd_state && !hdmi_ctrl->panel_power_on) ||
-			(hdmi_ctrl->hpd_state && !hdmi_ctrl->pdata.pluggable))
+	if (!hdmi_ctrl->hpd_state && !hdmi_ctrl->panel_power_on)
 		hdmi_tx_hpd_off(hdmi_ctrl);
 
 	hdmi_ctrl->panel_suspend = true;
@@ -3833,7 +3807,7 @@ end:
 static int hdmi_tx_evt_handle_close(struct hdmi_tx_ctrl *hdmi_ctrl)
 {
 	if (hdmi_ctrl->hpd_feature_on && hdmi_ctrl->hpd_initialized &&
-		!hdmi_ctrl->hpd_state)
+	    !hdmi_ctrl->hpd_state)
 		hdmi_tx_hpd_polarity_setup(hdmi_ctrl, HPD_CONNECT_POLARITY);
 
 	return 0;
@@ -3856,7 +3830,6 @@ static int hdmi_tx_event_handler(struct mdss_panel_data *panel_data,
 	/* UPDATE FPS is called from atomic context */
 	if (event == MDSS_EVENT_PANEL_UPDATE_FPS) {
 		hdmi_ctrl->dynamic_fps = (u32) (unsigned long)arg;
-		DEV_DBG("%s: fps %d\n", __func__, hdmi_ctrl->dynamic_fps);
 		queue_work(hdmi_ctrl->workq, &hdmi_ctrl->fps_work);
 		return rc;
 	}
@@ -4231,7 +4204,7 @@ static int hdmi_tx_get_dt_vreg_data(struct device *dev,
 				__func__, hdmi_tx_pm_name(module_type), rc);
 			goto error;
 		}
-		mp->vreg_config[j].load[DSS_REG_MODE_ENABLE] = val_array[i];
+		mp->vreg_config[j].enable_load = val_array[i];
 
 		memset(val_array, 0, sizeof(u32) * dt_vreg_total);
 		rc = of_property_read_u32_array(of_node,
@@ -4242,15 +4215,15 @@ static int hdmi_tx_get_dt_vreg_data(struct device *dev,
 				__func__, hdmi_tx_pm_name(module_type), rc);
 			goto error;
 		}
-		mp->vreg_config[j].load[DSS_REG_MODE_DISABLE] = val_array[i];
+		mp->vreg_config[j].disable_load = val_array[i];
 
 		DEV_DBG("%s: %s min=%d, max=%d, enable=%d disable=%d\n",
 			__func__,
 			mp->vreg_config[j].vreg_name,
 			mp->vreg_config[j].min_voltage,
 			mp->vreg_config[j].max_voltage,
-			mp->vreg_config[j].load[DSS_REG_MODE_ENABLE],
-			mp->vreg_config[j].load[DSS_REG_MODE_DISABLE]);
+			mp->vreg_config[j].enable_load,
+			mp->vreg_config[j].disable_load);
 
 		ndx_mask >>= 1;
 		j++;

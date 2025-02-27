@@ -19,4 +19,3 @@ obj-$(CONFIG_SENSORS_NFC_PN548) += pn548_htc.o
 
 #Laser Sensor
 obj-$(CONFIG_LASER_STMVL53L0_SUPPORT)   += stmvl53l0/
-obj-$(CONFIG_STMVL53L0)   				+= vl53L0/

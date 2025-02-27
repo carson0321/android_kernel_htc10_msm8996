@@ -18,7 +18,6 @@
 #include <trace/events/power.h>
 
 #include "power.h"
-#include <soc/qcom/htc_util.h>
 
 /*
  * If set, the suspend/hibernate code will abort transitions to a sleep state
@@ -455,10 +454,6 @@ static void wakeup_source_report_event(struct wakeup_source *ws)
 		wakeup_source_activate(ws);
 }
 
-#ifdef CONFIG_PM_DEBUG
-extern char wakelock_debug_buf[];
-#endif
-
 /**
  * __pm_stay_awake - Notify the PM core of a wakeup event.
  * @ws: Wakeup source object associated with the source of the event.
@@ -471,13 +466,6 @@ void __pm_stay_awake(struct wakeup_source *ws)
 
 	if (!ws)
 		return;
-
-#ifdef CONFIG_PM_DEBUG
-	if (!strncmp(ws->name, wakelock_debug_buf, sizeof(ws->name)-1)) {
-		pr_err("%s PID: %i requests wakelock %s", current->comm, current->pid, ws->name);
-		dump_stack();
-	}
-#endif
 
 	spin_lock_irqsave(&ws->lock, flags);
 
@@ -938,7 +926,7 @@ static int print_wakeup_source_stats(struct seq_file *m,
 		active_time = ktime_set(0, 0);
 	}
 
-	ret = seq_printf(m, "%-32s\t%lu\t\t%lu\t\t%lu\t\t%lu\t\t"
+	ret = seq_printf(m, "%-12s\t%lu\t\t%lu\t\t%lu\t\t%lu\t\t"
 			"%lld\t\t%lld\t\t%lld\t\t%lld\t\t%lld\n",
 			ws->name, active_count, ws->event_count,
 			ws->wakeup_count, ws->expire_count,
@@ -951,35 +939,6 @@ static int print_wakeup_source_stats(struct seq_file *m,
 	return ret;
 }
 
-#ifdef CONFIG_HTC_POWER_DEBUG
-void htc_print_active_wakeup_sources(bool print_embedded)
-{
-        struct wakeup_source *ws;
-        char output[512];
-        char piece[64];
-
-        rcu_read_lock();
-        memset(output, 0, sizeof(output));
-        list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
-            if (ws->active) {
-                memset(piece, 0, sizeof(piece));
-                if (ws->timer_expires) {
-                    long timeout = ws->timer_expires - jiffies;
-                    if (timeout > 0) {
-                        snprintf(piece, sizeof(piece), " '%s', time left %ld ticks; ", ws->name, timeout);
-                        safe_strcat(output, piece);
-                    }
-                } else {
-                    snprintf(piece, sizeof(piece), " '%s' ", ws->name);
-                    safe_strcat(output, piece);
-                }
-            }
-        }
-        rcu_read_unlock();
-        k_pr_embedded_cond(print_embedded, "[K] wakeup sources: %s\n", output);
-}
-#endif
-
 /**
  * wakeup_sources_stats_show - Print wakeup sources statistics information.
  * @m: seq_file to print the statistics into.
@@ -988,7 +947,7 @@ static int wakeup_sources_stats_show(struct seq_file *m, void *unused)
 {
 	struct wakeup_source *ws;
 
-	seq_puts(m, "name\t\t\t\t\tactive_count\tevent_count\twakeup_count\t"
+	seq_puts(m, "name\t\tactive_count\tevent_count\twakeup_count\t"
 		"expire_count\tactive_since\ttotal_time\tmax_time\t"
 		"last_change\tprevent_suspend_time\n");
 

@@ -605,8 +605,8 @@ static int tca6418_i2c_probe(struct i2c_client *client,
 	}
 
 	/* Validation */
-	pprop = of_get_property(pnode, "i2c-client", NULL);
-	if (!pprop || client->dev.of_node != of_find_node_by_phandle(be32_to_cpup(pprop))) {
+	if (client->dev.of_node != of_find_node_by_phandle(
+				be32_to_cpup(of_get_property(pnode, "i2c-client", NULL)))) {
 		dev_err(&client->dev, "Couldn't get a paired i2c-client\n");
 		return -EINVAL;
 	}

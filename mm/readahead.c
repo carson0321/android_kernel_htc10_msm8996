@@ -17,7 +17,6 @@
 #include <linux/pagemap.h>
 #include <linux/syscalls.h>
 #include <linux/file.h>
-#include <trace/events/mmcio.h>
 
 #include "internal.h"
 
@@ -197,15 +196,8 @@ int __do_page_cache_readahead(struct address_space *mapping, struct file *filp,
 	 * uptodate then the caller will launch readpage again, and
 	 * will then handle the error.
 	 */
-	if (ret) {
-		if (filp) {
-			char pathname[256], *path;
-			path = d_path(&(filp->f_path), pathname, sizeof(pathname));
-			if (!IS_ERR(path))
-				trace_readahead(path, ret);
-		}
+	if (ret)
 		read_pages(mapping, filp, &page_pool, ret);
-	}
 	BUG_ON(!list_empty(&page_pool));
 out:
 	return ret;

@@ -20,7 +20,6 @@
 #include <linux/pn544.h>
 #include <linux/types.h>
 #include <linux/regulator/consumer.h>
-#include <linux/clk.h>
 
 
 #include "pn548_mfg.h"
@@ -46,8 +45,6 @@ int is_debug_en = 0;
 int s_wdcmd_cnt = 0;
 int is_alive = 1;
 int is_uicc_swp = 1;
-// global var for clock source
-bool PLL_clock = false;
 
 #define SW_ENABLE_OFFMODECHARGING
 #ifdef SW_ENABLE_OFFMODECHARGING
@@ -87,22 +84,12 @@ struct pn544_dev	{
 	unsigned int 		ven_gpio;
 	unsigned int		ven_value;
 	unsigned int 		firm_gpio;
-	unsigned int            clkreq_gpio;
 	unsigned int		pvdd_en;
 	void (*gpio_init) (void);
 	unsigned int 		ven_enable;
 	int boot_mode;
 	bool                     isReadBlock;
-        /* CLK control */
-        bool                    clk_run;
-        struct  clk             *s_clk;
 };
-
-
-/*clock enable function*/
-static int nfc_clock_select(struct pn544_dev *pn544_dev);
-/*clock disable function*/
-static int nfc_clock_deselect(struct pn544_dev *pn544_dev);
 
 struct pn544_dev *pn_info;
 
@@ -432,52 +419,6 @@ static ssize_t pn544_dev_write(struct file *filp, const char __user *buf,
 	return ret;
 }
 
-/*
-        Routine to enable clock.
-        this routine can be extended to select from multiple
-        sources based on clk_src_name.
-*/
-static int nfc_clock_select(struct pn544_dev *pn544_dev)
-{
-        int ret = 0;
-
-        pn544_dev->s_clk =
-                        clk_get(&pn544_dev->client->dev, "ref_clk");
-
-        if (pn544_dev->s_clk == NULL)
-                goto err_clk;
-
-        if (pn544_dev->clk_run == false)
-                ret = clk_prepare_enable(pn544_dev->s_clk);
-
-        if (ret)
-                goto err_clk;
-
-        pn544_dev->clk_run = true;
-
-        return ret;
-
-err_clk:
-        ret = -1;
-        return ret;
-}
-/*
-        Routine to disable clocks
-*/
-static int nfc_clock_deselect(struct pn544_dev *pn544_dev)
-{
-        int ret = -1;
-
-        if (pn544_dev->s_clk != NULL) {
-                if (pn544_dev->clk_run == true) {
-                        clk_disable_unprepare(pn544_dev->s_clk);
-                        pn544_dev->clk_run = false;
-                }
-                return 0;
-        }
-        return ret;
-}
-
 static int pn544_dev_open(struct inode *inode, struct file *filp)
 {
 	struct pn544_dev *pn544_dev = container_of(filp->private_data,
@@ -495,7 +436,6 @@ static long pn544_dev_ioctl(struct file *filp,
 		unsigned int cmd, unsigned long arg)
 {
 	struct pn544_dev *pni = pn_info;
-	int ret;
 	switch (cmd) {
 	case PN544_SET_PWR:
 		if (arg == 3) {
@@ -518,11 +458,6 @@ static long pn544_dev_ioctl(struct file *filp,
 			I("%s power on delay 100ms\n", __func__);
 			gpio_set_value(pni->firm_gpio, 0);
 			pn544_Enable();
-			if(PLL_clock) {
-				ret = nfc_clock_select(pni);
-				if (ret < 0)
-					E("%s unable to enable clock\n", __func__);
-			}
 			msleep(100);
 			is_debug = 1;
 			s_wdcmd_cnt = 0;
@@ -532,11 +467,6 @@ static long pn544_dev_ioctl(struct file *filp,
 			I("%s power off delay 100ms\n", __func__);
 			gpio_set_value(pni->firm_gpio, 0);
 			pn544_Disable();
-			if(PLL_clock) {
-				ret = nfc_clock_deselect(pni);
-				if (ret < 0)
-					E("%s unable to disable clock\n", __func__);
-			}
 			msleep(100);
 			is_debug = is_debug_en;
 			I("%s pn544_Disable, set is_debug = %d, s_wdcmd_cnt = %d\n", __func__, is_debug, s_wdcmd_cnt);
@@ -1219,34 +1149,18 @@ static int mfg_nfc_test(int code)
 	case 1:  // reader mode test
 		I("%s: nfcreader test :\n", __func__);
 		pn544_hw_reset_control(1);
-		if(PLL_clock) {
-			if (script_processor(nfc_reader_pll_script, sizeof(nfc_reader_pll_script)) == 0) {
+		if (script_processor(nfc_reader_script, sizeof(nfc_reader_script)) == 0) {
 			I("%s: store value = %d\n", __func__, code);
 			mfc_nfc_cmd_result = 1;
-			}
-		}
-		else {
-			if (script_processor(nfc_reader_script, sizeof(nfc_reader_script)) == 0) {
-				I("%s: store value = %d\n", __func__, code);
-				mfc_nfc_cmd_result = 1;
-			}
 		}
 		pn544_hw_reset_control(0);
 		break;
 	case 2:  // card mode test
 		I("%s: nfccard test :\n", __func__);
 		pn544_hw_reset_control(1);
-		if(PLL_clock) {
-			if (script_processor(nfc_card_pll_script, sizeof(nfc_card_pll_script)) == 0) {
+		if (script_processor(nfc_card_script, sizeof(nfc_card_script)) == 0) {
 			I("%s: store value = %d\n", __func__, code);
 			mfc_nfc_cmd_result = 1;
-			}
-		}
-		else {
-			if (script_processor(nfc_card_script, sizeof(nfc_card_script)) == 0) {
-				I("%s: store value = %d\n", __func__, code);
-				mfc_nfc_cmd_result = 1;
-			}
 		}
 		pn544_hw_reset_control(0);
 		break;
@@ -1407,7 +1321,6 @@ static int pn544_parse_dt(struct device *dev, struct pn544_i2c_platform_data *pd
 {
 	struct property *prop;
 	struct device_node *dt = dev->of_node;
-	int ret;
 	pn548_htc_parse_dt(dev);
 	I("%s: Start\n", __func__);
 
@@ -1447,13 +1360,7 @@ static int pn544_parse_dt(struct device *dev, struct pn544_i2c_platform_data *pd
 	if(!gpio_is_valid(pdata->firm_gpio)) {
 		goto parse_error;
 	}
-	ret = of_property_read_string(dt, "qcom,clk-src", &pdata->clk_src_name);
-	if(ret)
-		I("%s: Use crystal as Clock Source\n", __func__);
-	else {
-		PLL_clock = true;
-		pdata->clkreq_gpio = of_get_named_gpio(dt, "qcom,nq-clkreq", 0);
-	}
+
 #ifdef PME_NFC_POWER_CONTROL
 	NFC_I2C_SCL = of_get_named_gpio_flags(dt, "nfc_i2c_scl", 0, NULL);
         if(!gpio_is_valid(NFC_I2C_SCL)) {
@@ -1580,15 +1487,7 @@ static int pn544_probe(struct i2c_client *client,
 		ret = -ENODEV;
 		goto err_request_gpio_firm;
 	}
-	if(PLL_clock) {
-		ret = gpio_request(platform_data->clkreq_gpio,"nfc_clkreq_gpio");
-		if(ret) {
-			E("%s : request gpio %d fail\n",
-				__func__, platform_data->clkreq_gpio);
-			ret = -ENODEV;
-			goto err_request_gpio_clkreq;
-		}
-	}
+
 	pni = kzalloc(sizeof(struct pn544_dev), GFP_KERNEL);
 	if (pni == NULL) {
 		dev_err(&client->dev, \
@@ -1608,8 +1507,6 @@ static int pn544_probe(struct i2c_client *client,
 	pni->irq_gpio = platform_data->irq_gpio;
 	pni->ven_gpio  = platform_data->ven_gpio;
 	pni->firm_gpio  = platform_data->firm_gpio;
-	if(PLL_clock)
-		pni->clkreq_gpio = platform_data->clkreq_gpio;
 	pni->client   = client;
 	pni->gpio_init = platform_data->gpio_init;
 	pni->ven_enable = !platform_data->ven_isinvert;
@@ -1623,10 +1520,6 @@ static int pn544_probe(struct i2c_client *client,
 	I("%s : ven_gpio set 0 %d \n", __func__,ret);
 	ret = gpio_direction_output(pni->firm_gpio, 0);
 	I("%s : firm_gpio set 0 %d \n", __func__,ret);
-	if(PLL_clock) {
-		ret = gpio_direction_input(pni->clkreq_gpio);
-		I("%s : clkreq_gpio set input %d \n", __func__,ret);
-	}
 
 	/* init mutex and queues */
 	init_waitqueue_head(&pni->read_wq);
@@ -1726,14 +1619,6 @@ static int pn544_probe(struct i2c_client *client,
         }
         I("%s: device_create_file for FTM mode done -\n", __func__);
 
-	if(PLL_clock) {
-		ret = nfc_clock_select(pni);
-		if (ret < 0) {
-			E("%s: nqx_clock_select failed\n", __func__);
-			goto err_create_pn_file;
-		}
-	}
-
 	if (is_alive) {
 		/*Disable NFC if it is not off-mode charging*/
 		if (pni->boot_mode == NFC_BOOT_MODE_OFF_MODE_CHARGING) {
@@ -1770,9 +1655,6 @@ err_misc_register:
 	kfree(pni);
 	pn_info = NULL;
 err_kzalloc:
-	if(PLL_clock)
-		gpio_free(platform_data->clkreq_gpio);
-err_request_gpio_clkreq:
 	gpio_free(platform_data->firm_gpio);
 err_request_gpio_firm:
 	gpio_free(platform_data->ven_gpio);
@@ -1802,8 +1684,6 @@ static int pn544_remove(struct i2c_client *client)
 	gpio_free(pn544_dev->irq_gpio);
 	gpio_free(pn544_dev->ven_gpio);
 	gpio_free(pn544_dev->firm_gpio);
-	if(PLL_clock)
-		gpio_free(pn544_dev->clkreq_gpio);
 	kfree(pn544_dev);
 	pn_info = NULL;
 

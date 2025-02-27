@@ -69,7 +69,6 @@ struct cpufreq_interactive_cpuinfo {
 	unsigned int loadadjfreq;
 };
 
-
 static DEFINE_PER_CPU(struct cpufreq_interactive_policyinfo *, polinfo);
 static DEFINE_PER_CPU(struct cpufreq_interactive_cpuinfo, cpuinfo);
 
@@ -420,13 +419,13 @@ static u64 update_load(int cpu)
 		ppol->policy->governor_data;
 	u64 now;
 	u64 now_idle;
-	u64 delta_idle;
-	u64 delta_time;
+	unsigned int delta_idle;
+	unsigned int delta_time;
 	u64 active_time;
 
 	now_idle = get_cpu_idle_time(cpu, &now, tunables->io_is_busy);
-	delta_idle = (now_idle - pcpu->time_in_idle);
-	delta_time = (now - pcpu->time_in_idle_timestamp);
+	delta_idle = (unsigned int)(now_idle - pcpu->time_in_idle);
+	delta_time = (unsigned int)(now - pcpu->time_in_idle_timestamp);
 
 	if (delta_time <= delta_idle)
 		active_time = 0;
@@ -486,6 +485,8 @@ static void cpufreq_interactive_timer(unsigned long data)
 	if (!ppol->governor_enabled)
 		goto exit;
 
+	now = ktime_to_us(ktime_get());
+
 	spin_lock_irqsave(&ppol->target_freq_lock, flags);
 	spin_lock(&ppol->load_lock);
 
@@ -533,6 +534,7 @@ static void cpufreq_interactive_timer(unsigned long data)
 			max_cpu = cpu;
 		}
 		pred_laf = max(t_predlaf, pred_laf);
+
 		cpu_load = max(prev_l, pred_l);
 		pol_load = max(pol_load, cpu_load);
 		trace_cpufreq_interactive_cpuload(cpu, cpu_load, new_load_pct,
@@ -571,7 +573,7 @@ static void cpufreq_interactive_timer(unsigned long data)
 	}
 
 	new_freq = chosen_freq;
-	if (jump_to_max_no_ts || jump_to_max) {
+	if (false && (jump_to_max_no_ts || jump_to_max)) {
 		new_freq = ppol->policy->cpuinfo.max_freq;
 	} else if (!skip_hispeed_logic) {
 		if (pol_load >= tunables->go_hispeed_load ||
@@ -808,8 +810,8 @@ static int load_change_callback(struct notifier_block *nb, unsigned long val,
 	spin_unlock_irqrestore(&ppol->target_freq_lock, flags);
 
 	if (!hrtimer_is_queued(&ppol->notif_timer))
-		__hrtimer_start_range_ns(&ppol->notif_timer, ms_to_ktime(1),
-					0, HRTIMER_MODE_REL, 0);
+		hrtimer_start(&ppol->notif_timer, ms_to_ktime(1),
+			      HRTIMER_MODE_REL);
 exit:
 	up_read(&ppol->enable_sem);
 	return 0;
@@ -820,7 +822,6 @@ static enum hrtimer_restart cpufreq_interactive_hrtimer(struct hrtimer *timer)
 	struct cpufreq_interactive_policyinfo *ppol = container_of(timer,
 			struct cpufreq_interactive_policyinfo, notif_timer);
 	int cpu;
-	unsigned long flags;
 
 	if (!down_read_trylock(&ppol->enable_sem))
 		return 0;
@@ -830,9 +831,6 @@ static enum hrtimer_restart cpufreq_interactive_hrtimer(struct hrtimer *timer)
 	}
 	cpu = ppol->notif_cpu;
 	trace_cpufreq_interactive_load_change(cpu);
-	spin_lock_irqsave(&ppol->target_freq_lock, flags);
-	ppol->notif_pending = true;
-	spin_unlock_irqrestore(&ppol->target_freq_lock, flags);
 	del_timer(&ppol->policy_timer);
 	del_timer(&ppol->policy_slack_timer);
 	cpufreq_interactive_timer(cpu);

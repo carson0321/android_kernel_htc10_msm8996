@@ -9,21 +9,7 @@
 #include <linux/crc32.h>
 #include <linux/ftrace.h>
 #include <sound/pcm.h>
-//HTC_AUD_START
-#undef pr_debug
-#undef pr_info
-#undef pr_err
-#define pr_debug(fmt, ...) pr_aud_debug(fmt, ##__VA_ARGS__)
-#define pr_info(fmt, ...) pr_aud_info(fmt, ##__VA_ARGS__)
-#define pr_err(fmt, ...) pr_aud_err(fmt, ##__VA_ARGS__)
-#define LEFT_DEFAULT 8000
-#define RIGHT_DEFAULT 6000
-//HTC_AUD_END
 
-/* 
-	i2c transaction on Linux limited to 64k
-	(See Linux kernel documentation: Documentation/i2c/writing-clients)
-*/
 #define MAX_I2C_BUFFER_SIZE 65536
 
 /* max. length of a alsa mixer control name */
@@ -117,7 +103,6 @@ struct tfa98xx {
 	int irq_gpio;
 
 //HTC_AUD_START
-	struct delayed_work loading_work;
 	int spk_source;
 //HTC_AUD_END
 

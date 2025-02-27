@@ -418,7 +418,6 @@ void mdss_dump_reg(const char *dump_name, u32 reg_dump_flag, char *addr,
 	u32 *dump_addr = NULL;
 	phys_addr_t phys = 0;
 	int i;
-	const int offset = 32;
 
 	in_log = (reg_dump_flag & MDSS_DBG_DUMP_IN_LOG);
 	in_mem = (reg_dump_flag & MDSS_DBG_DUMP_IN_MEM);
@@ -426,19 +425,19 @@ void mdss_dump_reg(const char *dump_name, u32 reg_dump_flag, char *addr,
 	pr_debug("reg_dump_flag=%d in_log=%d in_mem=%d\n",
 		reg_dump_flag, in_log, in_mem);
 
-	if (len % offset)
-		len += offset;
-	len /= offset;
+	if (len % 16)
+		len += 16;
+	len /= 16;
 
 	if (in_mem) {
 		if (!(*dump_mem))
 			*dump_mem = dma_alloc_coherent(&mdata->pdev->dev,
-				len * offset, &phys, GFP_KERNEL);
+				len * 16, &phys, GFP_KERNEL);
 
 		if (*dump_mem) {
 			dump_addr = *dump_mem;
 			pr_info("%s: start_addr:0x%pK end_addr:0x%pK reg_addr=0x%pK\n",
-				dump_name, dump_addr, dump_addr + (u32)len * offset,
+				dump_name, dump_addr, dump_addr + (u32)len * 16,
 				addr);
 		} else {
 			in_mem = false;
@@ -451,33 +450,24 @@ void mdss_dump_reg(const char *dump_name, u32 reg_dump_flag, char *addr,
 
 	for (i = 0; i < len; i++) {
 		u32 x0, x4, x8, xc;
-		u32 x10, x14, x18, x1c;
 
 		x0 = readl_relaxed(addr+0x0);
 		x4 = readl_relaxed(addr+0x4);
 		x8 = readl_relaxed(addr+0x8);
 		xc = readl_relaxed(addr+0xc);
-		x10 = readl_relaxed(addr+0x10);
-		x14 = readl_relaxed(addr+0x14);
-		x18 = readl_relaxed(addr+0x18);
-		x1c = readl_relaxed(addr+0x1c);
 
-		if (in_log && (i < 48))
-			pr_info("%pK : %08x %08x %08x %08x %08x %08x %08x %08x\n", addr, x0, x4, x8,
-				xc, x10, x14, x18, x1c);
+		if (in_log)
+			pr_info("%pK : %08x %08x %08x %08x\n", addr, x0, x4, x8,
+				xc);
 
 		if (dump_addr && in_mem) {
-			dump_addr[i*8] = x0;
-			dump_addr[i*8 + 1] = x4;
-			dump_addr[i*8 + 2] = x8;
-			dump_addr[i*8 + 3] = xc;
-			dump_addr[i*8 + 4] = x10;
-			dump_addr[i*8 + 5] = x14;
-			dump_addr[i*8 + 6] = x18;
-			dump_addr[i*8 + 7] = x1c;
+			dump_addr[i*4] = x0;
+			dump_addr[i*4 + 1] = x4;
+			dump_addr[i*4 + 2] = x8;
+			dump_addr[i*4 + 3] = xc;
 		}
 
-		addr += offset;
+		addr += 16;
 	}
 
 	if (!from_isr)
@@ -487,6 +477,7 @@ void mdss_dump_reg(const char *dump_name, u32 reg_dump_flag, char *addr,
 static void mdss_dump_reg_by_ranges(struct mdss_debug_base *dbg,
 	u32 reg_dump_flag)
 {
+#if 0
 	char *addr;
 	int len;
 	struct range_dump_node *xlog_node, *xlog_tmp;
@@ -516,12 +507,13 @@ static void mdss_dump_reg_by_ranges(struct mdss_debug_base *dbg,
 	} else {
 		/* If there is no list to dump ranges, dump all registers */
 		pr_info("Ranges not found, will dump full registers");
-		pr_info("base:0x%pK len:0x%zx\n", dbg->base, dbg->max_offset);
+		pr_info("base:0x%pK len:0x%zu\n", dbg->base, dbg->max_offset);
 		addr = dbg->base;
 		len = dbg->max_offset;
 		mdss_dump_reg((const char *)dbg->name, reg_dump_flag, addr,
 			len, &dbg->reg_dump, false);
 	}
+#endif
 }
 
 static void mdss_dump_reg_by_blk(const char *blk_name)

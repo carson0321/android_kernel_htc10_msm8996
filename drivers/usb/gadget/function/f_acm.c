@@ -5,7 +5,7 @@
  * Copyright (C) 2008 by David Brownell
  * Copyright (C) 2008 by Nokia Corporation
  * Copyright (C) 2009 by Samsung Electronics
- * Copyright (c) 2011, 2014, 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011, 2014 The Linux Foundation. All rights reserved.
  * Author: Michal Nazarewicz (mina86@mina86.com)
  *
  * This software is distributed under the terms of the GNU General
@@ -728,7 +728,7 @@ acm_bind(struct usb_configuration *c, struct usb_function *f)
 {
 	struct usb_composite_dev *cdev = c->cdev;
 	struct f_acm		*acm = func_to_acm(f);
-	static struct usb_string	*us; /*++ 2016/01/26 USB Team, PCN00061 ++*/
+	struct usb_string	*us;
 	int			status;
 	struct usb_ep		*ep;
 
@@ -737,12 +737,8 @@ acm_bind(struct usb_configuration *c, struct usb_function *f)
 	 */
 
 	/* maybe allocate device-global string IDs, and patch descriptors */
-/*++ 2016/01/26 USB Team, PCN00061 ++*/
-	/* Don't reset the ncm string ID */
-	if (!us)
 	us = usb_gstrings_attach(cdev, acm_strings,
 			ARRAY_SIZE(acm_string_defs));
-/*-- 2016/01/26 USB Team, PCN00061 --*/
 	if (IS_ERR(us))
 		return PTR_ERR(us);
 	acm_control_interface_desc.iInterface = us[ACM_CTRL_IDX].id;

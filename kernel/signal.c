@@ -44,7 +44,6 @@
 #include <asm/siginfo.h>
 #include <asm/cacheflush.h>
 #include "audit.h"	/* audit_signal_info() */
-#include <htc_debug/stability/htc_process_debug.h>
 
 /*
  * SLAB caches for signal bits.
@@ -347,7 +346,7 @@ static bool task_participate_group_stop(struct task_struct *task)
 	 * fresh group stop.  Read comment in do_signal_stop() for details.
 	 */
 	if (!sig->group_stop_count && !(sig->flags & SIGNAL_STOP_STOPPED)) {
-		signal_set_stop_flags(sig, SIGNAL_STOP_STOPPED);
+		sig->flags = SIGNAL_STOP_STOPPED;
 		return true;
 	}
 	return false;
@@ -544,8 +543,7 @@ unblock_all_signals(void)
 	spin_unlock_irqrestore(&current->sighand->siglock, flags);
 }
 
-static void collect_signal(int sig, struct sigpending *list, siginfo_t *info,
-			   bool *resched_timer)
+static void collect_signal(int sig, struct sigpending *list, siginfo_t *info)
 {
 	struct sigqueue *q, *first = NULL;
 
@@ -567,12 +565,6 @@ static void collect_signal(int sig, struct sigpending *list, siginfo_t *info,
 still_pending:
 		list_del_init(&first->list);
 		copy_siginfo(info, &first->info);
-
-		*resched_timer =
-			(first->flags & SIGQUEUE_PREALLOC) &&
-			(info->si_code == SI_TIMER) &&
-			(info->si_sys_private);
-
 		__sigqueue_free(first);
 	} else {
 		/*
@@ -589,7 +581,7 @@ still_pending:
 }
 
 static int __dequeue_signal(struct sigpending *pending, sigset_t *mask,
-			siginfo_t *info, bool *resched_timer)
+			siginfo_t *info)
 {
 	int sig = next_signal(pending, mask);
 
@@ -603,7 +595,7 @@ static int __dequeue_signal(struct sigpending *pending, sigset_t *mask,
 			}
 		}
 
-		collect_signal(sig, pending, info, resched_timer);
+		collect_signal(sig, pending, info);
 	}
 
 	return sig;
@@ -617,16 +609,15 @@ static int __dequeue_signal(struct sigpending *pending, sigset_t *mask,
  */
 int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
 {
-	bool resched_timer = false;
 	int signr;
 
 	/* We only dequeue private signals from ourselves, we don't let
 	 * signalfd steal them
 	 */
-	signr = __dequeue_signal(&tsk->pending, mask, info, &resched_timer);
+	signr = __dequeue_signal(&tsk->pending, mask, info);
 	if (!signr) {
 		signr = __dequeue_signal(&tsk->signal->shared_pending,
-					 mask, info, &resched_timer);
+					 mask, info);
 		/*
 		 * itimer signal ?
 		 *
@@ -671,7 +662,7 @@ int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
 		 */
 		current->jobctl |= JOBCTL_STOP_DEQUEUED;
 	}
-	if (resched_timer) {
+	if ((info->si_code & __SI_MASK) == __SI_TIMER && info->si_sys_private) {
 		/*
 		 * Release the siglock to ensure proper locking order
 		 * of timer locks outside of siglocks.  Note, we leave
@@ -897,7 +888,7 @@ static bool prepare_signal(int sig, struct task_struct *p, bool force)
 			 * will take ->siglock, notice SIGNAL_CLD_MASK, and
 			 * notify its parent. See get_signal_to_deliver().
 			 */
-			signal_set_stop_flags(signal, why | SIGNAL_STOP_CONTINUED);
+			signal->flags = why | SIGNAL_STOP_CONTINUED;
 			signal->group_stop_count = 0;
 			signal->group_exit_code = 0;
 		}
@@ -1029,21 +1020,6 @@ static inline void userns_fixup_signal_uid(struct siginfo *info, struct task_str
 }
 #endif
 
-static void collect_sigign_sigcatch(struct task_struct *p, sigset_t *ign,
-				    sigset_t *catch)
-{
-	struct k_sigaction *k;
-	int i;
-
-	k = p->sighand->action;
-	for (i = 1; i <= _NSIG; ++i, ++k) {
-		if (k->sa.sa_handler == SIG_IGN)
-			sigaddset(ign, i);
-		else if (k->sa.sa_handler != SIG_DFL)
-			sigaddset(catch, i);
-	}
-}
-
 static int __send_signal(int sig, struct siginfo *info, struct task_struct *t,
 			int group, int from_ancestor_ns)
 {
@@ -1145,100 +1121,13 @@ out_set:
 	complete_signal(sig, t, group);
 ret:
 	trace_signal_generate(sig, info, t, group, result);
-
-	if (t->comm && strstr(t->comm, "dq_log")) {
-		sigset_t ignored, caught;
-		collect_sigign_sigcatch(t, &ignored, &caught);
-
-		printk("[%s] process_name %s state=%ld, exit_state=%d, signal_flags=0x%x," \
-		    " result=%d sigcnt=%d," \
-		    " live=%d, pending=%ld," \
-		    " shpending=%ld," \
-		    " blocked=%lu, ignored=%lu," \
-		    " caught=%lu\n", \
-				__func__, t->comm, t->state, t->exit_state, t->signal->flags,
-				result, atomic_read(&t->signal->sigcnt),
-				atomic_read(&t->signal->live), *(unsigned long *)&(t->pending.signal),
-				*(unsigned long *)&(t->signal->shared_pending.signal),
-				*(unsigned long *)&(t->blocked), *(unsigned long *)&ignored,
-				*(unsigned long *)&caught);
-	}
-
 	return ret;
 }
-
-#if defined(CONFIG_HTC_DEBUG_DYING_PROCS)
-#include <linux/proc_fs.h>
-#include <linux/seq_file.h>
-#define MAX_DYING_PROC_COUNT (10)
-struct dying_pid {
-	pid_t pid;
-	unsigned long jiffy;
-};
-static DEFINE_SPINLOCK(dying_pid_lock);
-static int sigkill_pending(struct task_struct *tsk);
-static struct dying_pid dying_pid_buf[MAX_DYING_PROC_COUNT];
-static unsigned int dying_pid_buf_idx;
-
-static int proc_dying_processors_show(struct seq_file *m, void *v)
-{
-	unsigned long jiffy = jiffies;
-	unsigned long flags;
-	int i;
-
-	spin_lock_irqsave(&dying_pid_lock, flags);
-	for (i = 0; i < MAX_DYING_PROC_COUNT; i++)
-		if (dying_pid_buf[i].pid) {
-			seq_printf(m, "%ld:%ld\n",
-					(long int) dying_pid_buf[i].pid,
-					jiffy - dying_pid_buf[i].jiffy);
-		}
-	spin_unlock_irqrestore(&dying_pid_lock, flags);
-
-	return 0;
-}
-
-static int proc_dying_processors_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, proc_dying_processors_show, PDE_DATA(inode));
-}
-
-static const struct file_operations proc_dying_processors_fops = {
-	.open           = proc_dying_processors_open,
-	.read           = seq_read,
-	.llseek         = seq_lseek,
-	.release        = single_release,
-};
-
-static int __init dying_processors_init(void)
-{
-	memset(dying_pid_buf, 0, sizeof(dying_pid_buf));
-	proc_create_data("dying_processes", 0, NULL,
-			&proc_dying_processors_fops, NULL);
-	return 0;
-}
-module_init(dying_processors_init);
-#endif
 
 static int send_signal(int sig, struct siginfo *info, struct task_struct *t,
 			int group)
 {
 	int from_ancestor_ns = 0;
-
-#ifdef CONFIG_HTC_PROCESS_DEBUG
-	send_signal_debug_dump(sig, t);
-#endif
-
-#if defined(CONFIG_HTC_DEBUG_DYING_PROCS)
-	if (sig == SIGKILL && !sigkill_pending(t)) {
-		unsigned long flags;
-		spin_lock_irqsave(&dying_pid_lock, flags);
-		dying_pid_buf_idx = ((dying_pid_buf_idx + 1) % MAX_DYING_PROC_COUNT);
-		dying_pid_buf[dying_pid_buf_idx].pid = t->pid;
-		dying_pid_buf[dying_pid_buf_idx].jiffy = jiffies;
-		spin_unlock_irqrestore(&dying_pid_lock, flags);
-	}
-#endif
 
 #ifdef CONFIG_PID_NS
 	from_ancestor_ns = si_fromuser(info) &&
@@ -2604,7 +2493,7 @@ EXPORT_SYMBOL(unblock_all_signals);
  */
 SYSCALL_DEFINE0(restart_syscall)
 {
-	struct restart_block *restart = &current->restart_block;
+	struct restart_block *restart = &current_thread_info()->restart_block;
 	return restart->fn(restart);
 }
 

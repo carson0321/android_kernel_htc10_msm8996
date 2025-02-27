@@ -51,7 +51,6 @@
 #include <asm/ptrace.h>
 #include <asm/irq_regs.h>
 
-atomic_t em_remount = ATOMIC_INIT(0);
 /* Whether we react on sysrq keys or just ignore them */
 static int __read_mostly sysrq_enabled = CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE;
 static bool __read_mostly sysrq_always_enabled;
@@ -192,7 +191,6 @@ static struct sysrq_key_op sysrq_show_timers_op = {
 
 static void sysrq_handle_mountro(int key)
 {
-	atomic_set(&em_remount, 1);
 	emergency_remount();
 }
 static struct sysrq_key_op sysrq_mountro_op = {
@@ -295,10 +293,6 @@ static struct sysrq_key_op sysrq_showstate_op = {
 static void sysrq_handle_showstate_blocked(int key)
 {
 	show_state_filter(TASK_UNINTERRUPTIBLE);
-	pr_info("### Show All Tasks in System Server ###\n");
-#ifndef CONFIG_SCHED_QHMP
-	show_thread_group_state_filter("system_server", 0);
-#endif
 }
 static struct sysrq_key_op sysrq_showstate_blocked_op = {
 	.handler	= sysrq_handle_showstate_blocked,
@@ -535,8 +529,6 @@ void __handle_sysrq(int key, bool check_mask)
 	 */
 	orig_log_level = console_loglevel;
 	console_loglevel = CONSOLE_LOGLEVEL_DEFAULT;
-	printk(KERN_INFO "%s (%d:%d) triggered SysRq\n",
-			current->comm, current->tgid, current->pid);
 	printk(KERN_INFO "SysRq : ");
 
         op_p = __sysrq_get_key_op(key);
@@ -962,8 +954,23 @@ static bool sysrq_handler_registered;
 
 static inline void sysrq_register_handler(void)
 {
+	unsigned short key;
 	int error;
+	int i;
 
+	/* First check if a __weak interface was instantiated. */
+	for (i = 0; i < ARRAY_SIZE(sysrq_reset_seq); i++) {
+		key = platform_sysrq_reset_seq[i];
+		if (key == KEY_RESERVED || key > KEY_MAX)
+			break;
+
+		sysrq_reset_seq[sysrq_reset_seq_len++] = key;
+	}
+
+	/*
+	 * DT configuration takes precedence over anything that would
+	 * have been defined via the __weak interface.
+	 */
 	sysrq_of_get_keyreset_config();
 
 	error = input_register_handler(&sysrq_handler);

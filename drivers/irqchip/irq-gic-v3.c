@@ -36,10 +36,6 @@
 #include "irq-gic-common.h"
 #include "irqchip.h"
 
-#ifdef CONFIG_HTC_DEBUG_WATCHDOG
-#include <linux/htc_debug_tools.h>
-#endif
-
 struct redist_region {
 	void __iomem		*redist_base;
 	phys_addr_t		phys_base;
@@ -64,7 +60,6 @@ struct gic_chip_data {
 };
 
 static struct gic_chip_data gic_data __read_mostly;
-static DEFINE_RAW_SPINLOCK(irq_controller_lock);
 
 #define gic_data_rdist()		(this_cpu_ptr(gic_data.rdists.rdist))
 #define gic_data_rdist_rd_base()	(gic_data_rdist()->rd_base)
@@ -204,7 +199,7 @@ static void gic_enable_redist(bool enable)
 			return;	/* No PM support in this redistributor */
 	}
 
-	while (--count) {
+	while (count--) {
 		val = readl_relaxed(rbase + GICR_WAKER);
 		if (enable ^ (val & GICR_WAKER_ChildrenAsleep))
 			break;
@@ -369,17 +364,14 @@ static void gic_show_resume_irq(struct gic_chip_data *gic)
 	u32 pending[32];
 	void __iomem *base = gic_data_dist_base(gic);
 
-	msm_show_resume_irq_mask = 1;
 	if (!msm_show_resume_irq_mask)
 		return;
 
-	raw_spin_lock(&irq_controller_lock);
 	for (i = 0; i * 32 < gic->irq_nr; i++) {
 		enabled = readl_relaxed(base + GICD_ICENABLER + i * 4);
 		pending[i] = readl_relaxed(base + GICD_ISPENDR + i * 4);
 		pending[i] &= enabled;
 	}
-	raw_spin_unlock(&irq_controller_lock);
 
 	for (i = find_first_bit((unsigned long *)pending, gic->irq_nr);
 	     i < gic->irq_nr;
@@ -393,11 +385,7 @@ static void gic_show_resume_irq(struct gic_chip_data *gic)
 		else if (desc->action && desc->action->name)
 			name = desc->action->name;
 
-#ifdef CONFIG_HTC_POWER_DEBUG
-		pr_info("[WAKEUP] Resume caused by gic-%d, %d triggered %s\n", i, irq, name);
-#else
 		pr_warn("%s: %d triggered %s\n", __func__, irq, name);
-#endif
 	}
 }
 
@@ -457,14 +445,6 @@ static asmlinkage void __exception_irq_entry gic_handle_irq(struct pt_regs *regs
 
 		if (likely(irqnr > 15 && irqnr < 1020) || irqnr >= 8192) {
 			int err;
-
-#if defined(CONFIG_HTC_DEBUG_WATCHDOG)
-			/* only check on timer interrupt */
-			if (irqnr == 27 && smp_processor_id() == 0) {
-				unsigned long long timestamp = sched_clock();
-				htc_debug_watchdog_check_pet(timestamp);
-			}
-#endif /* CONFIG_HTC_DEBUG_WATCHDOG */
 			uncached_logk(LOGK_IRQ, (void *)(uintptr_t)irqnr);
 			err = handle_domain_irq(gic_data.domain, irqnr, regs);
 			if (err) {
@@ -477,13 +457,6 @@ static asmlinkage void __exception_irq_entry gic_handle_irq(struct pt_regs *regs
 			uncached_logk(LOGK_IRQ, (void *)(uintptr_t)irqnr);
 			gic_write_eoir(irqnr);
 #ifdef CONFIG_SMP
-			/*
-			 * Unlike GICv2, we don't need an smp_rmb() here.
-			 * The control dependency from gic_read_iar to
-			 * the ISB in gic_write_eoir is enough to ensure
-			 * that any shared data read by handle_IPI will
-			 * be read after the ACK.
-			 */
 			handle_IPI(irqnr, regs);
 #else
 			WARN_ONCE(true, "Unexpected SGI received!\n");
@@ -681,19 +654,15 @@ out:
 	return tlist;
 }
 
-#define MPIDR_TO_SGI_AFFINITY(cluster_id, level) \
-	(MPIDR_AFFINITY_LEVEL(cluster_id, level) \
-		<< ICC_SGI1R_AFFINITY_## level ##_SHIFT)
-
 static void gic_send_sgi(u64 cluster_id, u16 tlist, unsigned int irq)
 {
 	u64 val;
 
-	val = (MPIDR_TO_SGI_AFFINITY(cluster_id, 3)	|
-	       MPIDR_TO_SGI_AFFINITY(cluster_id, 2)	|
-	       irq << ICC_SGI1R_SGI_ID_SHIFT		|
-	       MPIDR_TO_SGI_AFFINITY(cluster_id, 1)	|
-	       tlist << ICC_SGI1R_TARGET_LIST_SHIFT);
+	val = (MPIDR_AFFINITY_LEVEL(cluster_id, 3) << 48	|
+	       MPIDR_AFFINITY_LEVEL(cluster_id, 2) << 32	|
+	       irq << 24			    		|
+	       MPIDR_AFFINITY_LEVEL(cluster_id, 1) << 16	|
+	       tlist);
 
 	pr_debug("CPU%d: ICC_SGI1R_EL1 %llx\n", smp_processor_id(), val);
 	gic_write_sgi1r(val);
@@ -737,9 +706,6 @@ static int gic_set_affinity(struct irq_data *d, const struct cpumask *mask_val,
 	void __iomem *reg;
 	int enabled;
 	u64 val;
-
-	if (cpu >= nr_cpu_ids)
-		return -EINVAL;
 
 	if (gic_irq_in_rdist(d))
 		return -EINVAL;
