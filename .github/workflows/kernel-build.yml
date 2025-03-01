@@ -24,7 +24,7 @@ jobs:
         run: |
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
           sudo apt-get update
-          sudo apt-get install -y gcc-9 g++-9 clang-9 llvm-9 lld-9
+          sudo apt-get install -y gcc-4.9 g++-4.9 gcc-9 g++-9 clang-9 llvm-9 lld-9
           sudo apt-get install -y bc bison flex libssl-dev libelf-dev ccache \
                                   build-essential libncurses5-dev \
                                   make python3 gcc-aarch64-linux-gnu crossbuild-essential-arm64
@@ -32,8 +32,8 @@ jobs:
       - name: 🔧 Set environment
         run: |
           echo "ARCH=${{ matrix.arch }}" >> $GITHUB_ENV
-          echo "CC=clang-9" >> $GITHUB_ENV
-          echo "CXX=clang++-9" >> $GITHUB_ENV
+          echo "CC=gcc-4.9" >> $GITHUB_ENV
+          echo "CXX=g++-4.9" >> $GITHUB_ENV
           echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
 
       - name: 📑 Clean & Configure kernel
@@ -43,7 +43,7 @@ jobs:
 
       - name: 🚀 Compile source code
         run: |
-          make CC=clang -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image.gz-dtb
+          make CC=$CC -j$(nproc) ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE Image.gz-dtb
 
       - name: 🏗️ Generate boot.img
         run: |
